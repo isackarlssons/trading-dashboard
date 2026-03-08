@@ -22,6 +22,13 @@ function SignalsContent() {
   const [entryPrice, setEntryPrice] = useState("");
   const [quantity, setQuantity] = useState("");
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [generating, setGenerating] = useState(false);
+  const [success, setSuccess] = useState("");
+
+  useEffect(() => {
+    strategiesApi.list().then(setStrategies).catch(console.error);
+  }, []);
 
   useEffect(() => {
     loadSignals();
@@ -61,6 +68,72 @@ function SignalsContent() {
     }
   }
 
+  async function handleGenerateTestSignals(count: number) {
+    if (strategies.length === 0) {
+      setError("No strategies loaded yet");
+      return;
+    }
+    setGenerating(true);
+    setError("");
+    setSuccess("");
+
+    const tickers: Record<string, { t: string; p: number }[]> = {
+      US: [
+        { t: "AAPL", p: 195 }, { t: "MSFT", p: 420 }, { t: "NVDA", p: 136 },
+        { t: "AMZN", p: 186 }, { t: "TSLA", p: 249 }, { t: "META", p: 505 },
+        { t: "GOOGL", p: 175 }, { t: "AMD", p: 162 }, { t: "NFLX", p: 686 },
+        { t: "CRM", p: 273 }, { t: "COST", p: 912 }, { t: "AVGO", p: 179 },
+      ],
+      SE: [
+        { t: "ABB.ST", p: 612 }, { t: "AZN.ST", p: 2145 },
+        { t: "VOLV-B.ST", p: 285 }, { t: "ASSA-B.ST", p: 313 },
+        { t: "BOL.ST", p: 345 }, { t: "ELUX-B.ST", p: 89 },
+      ],
+    };
+    const setups = ["zone_bounce", "zone_breakout", "trend_follow", "reversal", "momentum"];
+
+    try {
+      for (let i = 0; i < count; i++) {
+        const strat = strategies[Math.floor(Math.random() * strategies.length)];
+        const cfg = strat.config as Record<string, string> | null;
+        const market = cfg?.market || "US";
+        const stocks = tickers[market] || tickers.US;
+        const stock = stocks[Math.floor(Math.random() * stocks.length)];
+        const dir = Math.random() > 0.2 ? "long" : "short";
+        const vary = 1 + (Math.random() - 0.5) * 0.04;
+        const entry = +(stock.p * vary).toFixed(2);
+        const slPct = 0.02 + Math.random() * 0.03;
+        const sl = dir === "long" ? +(entry * (1 - slPct)).toFixed(2) : +(entry * (1 + slPct)).toFixed(2);
+        const rr = 1.5 + Math.random() * 1.5;
+        const risk = Math.abs(entry - sl);
+        const tp = dir === "long" ? +(entry + risk * rr).toFixed(2) : +(entry - risk * rr).toFixed(2);
+        const score = +(0.55 + Math.random() * 0.4).toFixed(2);
+        const setup = setups[Math.floor(Math.random() * setups.length)];
+        const hoursAgo = Math.random() * 4;
+        const sigTime = new Date(Date.now() - hoursAgo * 3600000).toISOString();
+
+        await signalsApi.create({
+          strategy_id: strat.id,
+          ticker: stock.t,
+          direction: dir as "long" | "short",
+          entry_price: entry,
+          stop_loss: sl,
+          take_profit: tp,
+          confidence: score,
+          metadata: { market, setup_type: setup, generated: "test_bot", strategy_version: strat.version },
+          expires_at: sigTime,
+        });
+      }
+      setSuccess(`🤖 Bot generated ${count} test signals!`);
+      loadSignals();
+      setTimeout(() => setSuccess(""), 4000);
+    } catch (err: any) {
+      setError("Generate failed: " + err.message);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   async function handleSkipSignal(signalId: string) {
     try {
       await signalsApi.update(signalId, { status: "skipped" });
@@ -91,27 +164,26 @@ function SignalsContent() {
             ))}
           </div>
           <button
-            onClick={() => setShowCreateForm(!showCreateForm)}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              showCreateForm
-                ? "bg-red-600 hover:bg-red-700 text-white"
-                : "bg-green-600 hover:bg-green-700 text-white"
-            }`}
+            onClick={() => handleGenerateTestSignals(3)}
+            disabled={generating}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white transition-colors disabled:opacity-50"
           >
-            {showCreateForm ? "✕ Close" : "+ New Signal"}
+            {generating ? "⏳..." : "🤖 Generate 3"}
+          </button>
+          <button
+            onClick={() => handleGenerateTestSignals(8)}
+            disabled={generating}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white transition-colors disabled:opacity-50"
+          >
+            🤖 Generate 8
           </button>
         </div>
       </div>
 
-      {/* Create Signal Form */}
-      {showCreateForm && (
-        <CreateSignalForm
-          onCreated={() => {
-            setShowCreateForm(false);
-            loadSignals();
-          }}
-          onCancel={() => setShowCreateForm(false)}
-        />
+      {success && (
+        <div className="card border-green-500/30 bg-green-500/5">
+          <p className="text-green-400 text-sm">{success}</p>
+        </div>
       )}
 
       {error && (
@@ -147,14 +219,18 @@ function SignalsContent() {
                     </span>
                   </div>
                   <StatusBadge status={signal.status} />
-                  {signal.metadata?.setup_type && (
+                  {typeof signal.metadata === "object" &&
+                   signal.metadata !== null &&
+                   "setup_type" in signal.metadata && (
                     <span className="badge bg-purple-500/20 text-purple-400">
-                      {String(signal.metadata.setup_type)}
+                      {String((signal.metadata as Record<string, unknown>).setup_type)}
                     </span>
                   )}
-                  {signal.metadata?.market && (
+                  {typeof signal.metadata === "object" &&
+                   signal.metadata !== null &&
+                   "market" in signal.metadata && (
                     <span className="badge bg-indigo-500/20 text-indigo-400">
-                      {String(signal.metadata.market)}
+                      {String((signal.metadata as Record<string, unknown>).market)}
                     </span>
                   )}
                 </div>
