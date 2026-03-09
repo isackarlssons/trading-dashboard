@@ -36,3 +36,22 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/pending")
+async def get_pending():
+    return []
+
+
+@app.get("/open")
+async def get_open():
+    return []
+
+
+@app.get("/stats")
+async def get_stats():
+    return {
+        "totalTrades": 0,
+        "winRate": 0,
+        "pnl": 0
+    }
