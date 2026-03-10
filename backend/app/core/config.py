@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # App
     app_env: str = "development"
     cors_origins: str = "http://localhost:3000"
-    bot_api_key: str = ""  # Internal API key for bot-to-backend auth
+    bot_api_key: str = "pAY9thWFEu6fXYw4XBkdXIyIlppZFU-zjSmfBkGo8TE"  # Internal API key for bot-to-backend auth
 
     @property
     def cors_origins_list(self) -> List[str]:
