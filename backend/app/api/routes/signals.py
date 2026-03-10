@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from typing import List, Optional
 from uuid import UUID
 
@@ -102,7 +102,7 @@ async def update_signal(
 
 @router.post("/bulk", status_code=201)
 async def create_signals_bulk(
-    signals_data: list,
+    signals_data: List[dict] = Body(...),
     user: dict = Depends(get_current_user),
 ):
     """Create multiple signals at once."""
