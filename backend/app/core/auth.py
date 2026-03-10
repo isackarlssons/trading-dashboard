@@ -11,8 +11,10 @@ async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> dict:
     """
-    Validate JWT token by calling Supabase's auth endpoint.
-    If no token provided or validation fails in dev mode, return a default user.
+    Validate authentication.  Accepts either:
+      1. A Supabase JWT (validated against Supabase /auth/v1/user)
+      2. The internal BOT_API_KEY (for server-to-server calls from the stock bot)
+      3. No token at all in dev mode (APP_ENV=development)
     """
     if not credentials:
         # No token - allow in dev mode
@@ -22,6 +24,12 @@ async def get_current_user(
 
     token = credentials.credentials
 
+    # ── Check internal bot API key first ──
+    bot_key = getattr(settings, "bot_api_key", "") or ""
+    if bot_key and token == bot_key:
+        return {"user_id": "bot", "email": "bot@internal"}
+
+    # ── Supabase JWT validation ──
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
