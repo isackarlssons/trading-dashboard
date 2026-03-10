@@ -24,10 +24,9 @@ async def get_current_user(
 
     token = credentials.credentials
 
-    # ── Check internal bot API key first ──
-    _BOT_KEY_FALLBACK = "pAY9thWFEu6fXYw4XBkdXIyIlppZFU-zjSmfBkGo8TE"
-    bot_key = getattr(settings, "bot_api_key", "") or _BOT_KEY_FALLBACK
-    if token == bot_key or token == _BOT_KEY_FALLBACK:
+    # ── Check internal bot API key (read from BOT_API_KEY env var) ──
+    bot_key = settings.bot_api_key
+    if bot_key and token == bot_key:
         return {"user_id": "bot", "email": "bot@internal"}
 
     # ── Supabase JWT validation ──
