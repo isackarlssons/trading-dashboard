@@ -12,10 +12,20 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS
+# CORS – hardcoded origins so it works regardless of env-var config
+_cors_origins = [
+    "https://trading-dashboard-leexeygz0-isackarlsson1997-gmailcoms-projects.vercel.app",
+    "https://trading-dashboard-git-main-isackarlsson1997-gmailcoms-projects.vercel.app",
+    "http://localhost:3000",
+]
+# Merge any extra origins coming from CORS_ORIGINS env var
+for _o in settings.cors_origins_list:
+    if _o and _o not in _cors_origins:
+        _cors_origins.append(_o)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
