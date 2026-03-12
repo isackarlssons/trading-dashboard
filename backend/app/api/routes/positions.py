@@ -34,11 +34,11 @@ async def list_positions(
 async def list_open_positions(
     user: dict = Depends(get_current_user),
 ):
-    """Get all currently open positions."""
+    """Get all currently open positions with their pending actions."""
     sb = get_supabase()
     result = (
         sb.table("positions")
-        .select("*")
+        .select("*, position_actions(*), partial_exits(*)")
         .eq("status", "open")
         .order("opened_at", desc=True)
         .execute()
@@ -51,11 +51,11 @@ async def get_position(
     position_id: str,
     user: dict = Depends(get_current_user),
 ):
-    """Get a specific position."""
+    """Get a specific position with actions and partial exits."""
     sb = get_supabase()
     result = (
         sb.table("positions")
-        .select("*")
+        .select("*, position_actions(*), partial_exits(*)")
         .eq("id", position_id)
         .single()
         .execute()
@@ -74,6 +74,10 @@ async def create_position(
     sb = get_supabase()
     if "ticker" in data:
         data["ticker"] = data["ticker"].upper()
+    # Set original/remaining quantity if quantity provided
+    if data.get("quantity"):
+        data.setdefault("original_quantity", data["quantity"])
+        data.setdefault("remaining_quantity", data["quantity"])
     result = sb.table("positions").insert(data).execute()
     return result.data[0] if result.data else {}
 
@@ -100,6 +104,8 @@ async def create_position_from_signal(
     if signal["status"] != "pending":
         raise HTTPException(status_code=400, detail=f"Signal is already {signal['status']}")
 
+    qty = data.get("quantity")
+
     # Create position
     position_data = {
         "signal_id": signal["id"],
@@ -108,7 +114,9 @@ async def create_position_from_signal(
         "entry_price": data["entry_price"],
         "stop_loss": data.get("stop_loss") or signal.get("stop_loss"),
         "take_profit": data.get("take_profit") or signal.get("take_profit"),
-        "quantity": data.get("quantity"),
+        "quantity": qty,
+        "original_quantity": qty,
+        "remaining_quantity": qty,
         "notes": data.get("notes"),
         "status": "open",
     }
@@ -121,6 +129,148 @@ async def create_position_from_signal(
     }).eq("id", signal["id"]).execute()
 
     return pos_result.data[0] if pos_result.data else {}
+
+
+@router.patch("/{position_id}")
+async def update_position(
+    position_id: str,
+    data: dict,
+    user: dict = Depends(get_current_user),
+):
+    """Update a position (stop_loss, take_profit, notes, remaining_quantity)."""
+    sb = get_supabase()
+
+    allowed_fields = {"stop_loss", "take_profit", "notes", "remaining_quantity", "quantity"}
+    update_data = {k: v for k, v in data.items() if k in allowed_fields}
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    result = (
+        sb.table("positions")
+        .update(update_data)
+        .eq("id", position_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Position not found")
+    return result.data[0]
+
+
+@router.post("/{position_id}/partial-close")
+async def partial_close_position(
+    position_id: str,
+    data: dict,
+    user: dict = Depends(get_current_user),
+):
+    """Partially close a position: sell some quantity, keep the rest open."""
+    sb = get_supabase()
+
+    # Get position
+    pos_result = (
+        sb.table("positions")
+        .select("*")
+        .eq("id", position_id)
+        .single()
+        .execute()
+    )
+    position = pos_result.data
+    if not position:
+        raise HTTPException(status_code=404, detail="Position not found")
+    if position["status"] != "open":
+        raise HTTPException(status_code=400, detail="Position is not open")
+
+    exit_price = data["exit_price"]
+    exit_quantity = data["quantity"]
+    fees = data.get("fees", 0)
+    entry_price = position["entry_price"]
+    now = datetime.utcnow().isoformat()
+
+    remaining = position.get("remaining_quantity") or position.get("quantity")
+    if remaining is None:
+        raise HTTPException(status_code=400, detail="Position has no quantity set")
+    if exit_quantity > remaining:
+        raise HTTPException(status_code=400, detail=f"Cannot sell {exit_quantity}, only {remaining} remaining")
+
+    # Calculate P&L for this partial exit
+    if position["direction"] == "long":
+        pnl_percent = ((exit_price - entry_price) / entry_price) * 100
+        pnl = (exit_price - entry_price) * exit_quantity - fees
+    else:
+        pnl_percent = ((entry_price - exit_price) / entry_price) * 100
+        pnl = (entry_price - exit_price) * exit_quantity - fees
+
+    # Create partial exit record
+    partial_data = {
+        "position_id": position_id,
+        "exit_price": exit_price,
+        "quantity": exit_quantity,
+        "pnl": round(pnl, 2),
+        "pnl_percent": round(pnl_percent, 2),
+        "fees": fees,
+        "notes": data.get("notes"),
+        "exited_at": now,
+    }
+    sb.table("partial_exits").insert(partial_data).execute()
+
+    # Update remaining quantity
+    new_remaining = remaining - exit_quantity
+    update_data = {"remaining_quantity": new_remaining}
+
+    # If nothing remaining, close the position fully
+    if new_remaining <= 0:
+        update_data["status"] = "closed"
+        update_data["closed_at"] = now
+
+        # Also create a trade record for the full position
+        # Aggregate all partial exits for final P&L
+        all_partials = (
+            sb.table("partial_exits")
+            .select("*")
+            .eq("position_id", position_id)
+            .execute()
+        ).data or []
+
+        total_pnl = sum(p.get("pnl", 0) or 0 for p in all_partials)
+        total_fees = sum(p.get("fees", 0) or 0 for p in all_partials)
+        total_qty = position.get("original_quantity") or position.get("quantity")
+
+        # Weighted average exit price
+        total_exit_value = sum((p.get("exit_price", 0) * p.get("quantity", 0)) for p in all_partials)
+        total_exit_qty = sum(p.get("quantity", 0) for p in all_partials)
+        avg_exit_price = total_exit_value / total_exit_qty if total_exit_qty > 0 else exit_price
+
+        if position["direction"] == "long":
+            overall_pnl_pct = ((avg_exit_price - entry_price) / entry_price) * 100
+        else:
+            overall_pnl_pct = ((entry_price - avg_exit_price) / entry_price) * 100
+
+        result_type = "breakeven" if abs(overall_pnl_pct) < 0.1 else ("win" if overall_pnl_pct > 0 else "loss")
+
+        trade_data = {
+            "position_id": position_id,
+            "ticker": position["ticker"],
+            "direction": position["direction"],
+            "entry_price": entry_price,
+            "exit_price": round(avg_exit_price, 2),
+            "quantity": total_qty,
+            "pnl": round(total_pnl, 2),
+            "pnl_percent": round(overall_pnl_pct, 2),
+            "result": result_type,
+            "fees": total_fees,
+            "notes": data.get("notes") or position.get("notes"),
+            "opened_at": position["opened_at"],
+            "closed_at": now,
+        }
+        sb.table("trades").insert(trade_data).execute()
+
+    sb.table("positions").update(update_data).eq("id", position_id).execute()
+
+    return {
+        "partial_exit": partial_data,
+        "remaining_quantity": new_remaining,
+        "position_closed": new_remaining <= 0,
+    }
 
 
 @router.post("/{position_id}/close")
@@ -157,17 +307,53 @@ async def close_position(
     else:
         pnl_percent = ((entry_price - exit_price) / entry_price) * 100
 
+    # Check for prior partial exits
+    partials_result = (
+        sb.table("partial_exits")
+        .select("*")
+        .eq("position_id", position_id)
+        .execute()
+    )
+    prior_partials = partials_result.data or []
+
+    remaining_qty = position.get("remaining_quantity") or position.get("quantity")
+    original_qty = position.get("original_quantity") or position.get("quantity")
+
     pnl = None
-    if position.get("quantity"):
+    if remaining_qty:
         if position["direction"] == "long":
-            pnl = (exit_price - entry_price) * position["quantity"] - fees
+            pnl = (exit_price - entry_price) * remaining_qty - fees
         else:
-            pnl = (entry_price - exit_price) * position["quantity"] - fees
+            pnl = (entry_price - exit_price) * remaining_qty - fees
+
+    # If there were partial exits, aggregate total P&L
+    if prior_partials:
+        partial_pnl = sum(p.get("pnl", 0) or 0 for p in prior_partials)
+        partial_fees = sum(p.get("fees", 0) or 0 for p in prior_partials)
+        total_pnl = (pnl or 0) + partial_pnl
+        total_fees = fees + partial_fees
+
+        # Weighted average exit
+        partial_exit_value = sum((p.get("exit_price", 0) * p.get("quantity", 0)) for p in prior_partials)
+        partial_exit_qty = sum(p.get("quantity", 0) for p in prior_partials)
+        final_exit_value = exit_price * (remaining_qty or 0)
+        total_exit_qty = partial_exit_qty + (remaining_qty or 0)
+        avg_exit = (partial_exit_value + final_exit_value) / total_exit_qty if total_exit_qty > 0 else exit_price
+
+        if position["direction"] == "long":
+            overall_pnl_pct = ((avg_exit - entry_price) / entry_price) * 100
+        else:
+            overall_pnl_pct = ((entry_price - avg_exit) / entry_price) * 100
+    else:
+        total_pnl = pnl
+        total_fees = fees
+        avg_exit = exit_price
+        overall_pnl_pct = pnl_percent
 
     # Determine result
-    if abs(pnl_percent) < 0.1:
+    if abs(overall_pnl_pct) < 0.1:
         result = "breakeven"
-    elif pnl_percent > 0:
+    elif overall_pnl_pct > 0:
         result = "win"
     else:
         result = "loss"
@@ -176,6 +362,7 @@ async def close_position(
     sb.table("positions").update({
         "status": "closed",
         "closed_at": now,
+        "remaining_quantity": 0,
     }).eq("id", position_id).execute()
 
     # Create trade record
@@ -184,12 +371,12 @@ async def close_position(
         "ticker": position["ticker"],
         "direction": position["direction"],
         "entry_price": entry_price,
-        "exit_price": exit_price,
-        "quantity": position.get("quantity"),
-        "pnl": round(pnl, 2) if pnl is not None else None,
-        "pnl_percent": round(pnl_percent, 2),
+        "exit_price": round(avg_exit, 2),
+        "quantity": original_qty,
+        "pnl": round(total_pnl, 2) if total_pnl is not None else None,
+        "pnl_percent": round(overall_pnl_pct, 2),
         "result": result,
-        "fees": fees,
+        "fees": total_fees,
         "notes": data.get("notes") or position.get("notes"),
         "opened_at": position["opened_at"],
         "closed_at": now,
@@ -197,3 +384,27 @@ async def close_position(
     trade_result = sb.table("trades").insert(trade_data).execute()
 
     return trade_result.data[0] if trade_result.data else {}
+
+
+@router.delete("/{position_id}")
+async def delete_position(
+    position_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Delete a position (for error correction). Also deletes related trades/actions/partials via CASCADE."""
+    sb = get_supabase()
+
+    # Verify it exists
+    pos_result = (
+        sb.table("positions")
+        .select("id, status")
+        .eq("id", position_id)
+        .single()
+        .execute()
+    )
+    if not pos_result.data:
+        raise HTTPException(status_code=404, detail="Position not found")
+
+    # Delete (cascades to position_actions, partial_exits; trades also cascade)
+    sb.table("positions").delete().eq("id", position_id).execute()
+    return {"deleted": True}

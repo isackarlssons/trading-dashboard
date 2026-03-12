@@ -1,9 +1,13 @@
 "use client";
 
 import AppShell from "@/components/layout/AppShell";
-import { useEffect, useState } from "react";
-import { positionsApi } from "@/lib/api";
-import type { Position, ClosePosition } from "@/types";
+import { useEffect, useState, useCallback } from "react";
+import { positionsApi, positionActionsApi } from "@/lib/api";
+import { PositionCard } from "@/components/positions/PositionCard";
+import { Badge } from "@/components/ui/Badge";
+import type { Position, ClosePosition, PartialClosePosition } from "@/types";
+
+type TabFilter = "open" | "closed" | "all";
 
 export default function PositionsPage() {
   return (
@@ -15,25 +19,36 @@ export default function PositionsPage() {
 
 function PositionsContent() {
   const [positions, setPositions] = useState<Position[]>([]);
-  const [filter, setFilter] = useState<string>("open");
+  const [tab, setTab] = useState<TabFilter>("open");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [closingPosition, setClosingPosition] = useState<string | null>(null);
+
+  // Close modal
+  const [closingId, setClosingId] = useState<string | null>(null);
   const [exitPrice, setExitPrice] = useState("");
-  const [fees, setFees] = useState("");
+  const [closeFees, setCloseFees] = useState("");
+
+  // Partial close modal
+  const [partialClosingId, setPartialClosingId] = useState<string | null>(null);
+  const [partialExitPrice, setPartialExitPrice] = useState("");
+  const [partialQuantity, setPartialQuantity] = useState("");
+  const [partialFees, setPartialFees] = useState("");
+
+  // Delete confirmation
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     loadPositions();
-  }, [filter]);
+  }, [tab]);
 
-  async function loadPositions() {
+  const loadPositions = useCallback(async () => {
     try {
       setLoading(true);
-      if (filter === "open") {
+      if (tab === "open") {
         const data = await positionsApi.open();
         setPositions(data);
       } else {
-        const params = filter !== "all" ? { status: filter } : undefined;
+        const params = tab !== "all" ? { status: tab } : undefined;
         const data = await positionsApi.list(params);
         setPositions(data);
       }
@@ -42,170 +57,339 @@ function PositionsContent() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [tab]);
+
+  // ─── Close position ──────────────────────────────────────────────────────
 
   async function handleClosePosition(positionId: string) {
-    if (!exitPrice) return;
+    if (closingId === positionId) {
+      if (!exitPrice) return;
+      try {
+        const data: ClosePosition = {
+          exit_price: parseFloat(exitPrice),
+          fees: closeFees ? parseFloat(closeFees) : 0,
+        };
 
-    try {
-      const data: ClosePosition = {
-        exit_price: parseFloat(exitPrice),
-        fees: fees ? parseFloat(fees) : 0,
-      };
-      await positionsApi.close(positionId, data);
-      setClosingPosition(null);
-      setExitPrice("");
-      setFees("");
-      loadPositions();
-    } catch (err: any) {
-      setError(err.message);
+        // Optimistic: remove from list
+        setPositions((prev) =>
+          prev.map((p) =>
+            p.id === positionId ? { ...p, status: "closed" as const } : p
+          )
+        );
+        setClosingId(null);
+        setExitPrice("");
+        setCloseFees("");
+
+        await positionsApi.close(positionId, data);
+        loadPositions();
+      } catch (err: any) {
+        setError(err.message);
+        loadPositions();
+      }
+    } else {
+      setClosingId(positionId);
+      setPartialClosingId(null);
     }
   }
 
+  // ─── Partial close ───────────────────────────────────────────────────────
+
+  async function handlePartialClose(positionId: string) {
+    if (partialClosingId === positionId) {
+      if (!partialExitPrice || !partialQuantity) return;
+      try {
+        const data: PartialClosePosition = {
+          exit_price: parseFloat(partialExitPrice),
+          quantity: parseFloat(partialQuantity),
+          fees: partialFees ? parseFloat(partialFees) : 0,
+        };
+
+        setPartialClosingId(null);
+        setPartialExitPrice("");
+        setPartialQuantity("");
+        setPartialFees("");
+
+        await positionsApi.partialClose(positionId, data);
+        loadPositions();
+      } catch (err: any) {
+        setError(err.message);
+      }
+    } else {
+      setPartialClosingId(positionId);
+      setClosingId(null);
+    }
+  }
+
+  // ─── Update stop ─────────────────────────────────────────────────────────
+
+  async function handleUpdateStop(positionId: string, newStop: number) {
+    try {
+      setPositions((prev) =>
+        prev.map((p) =>
+          p.id === positionId ? { ...p, stop_loss: newStop } : p
+        )
+      );
+      await positionsApi.update(positionId, { stop_loss: newStop });
+    } catch (err: any) {
+      setError(err.message);
+      loadPositions();
+    }
+  }
+
+  // ─── Acknowledge / Execute action ─────────────────────────────────────────
+
+  async function handleAcknowledgeAction(actionId: string) {
+    try {
+      // Optimistic
+      setPositions((prev) =>
+        prev.map((p) => ({
+          ...p,
+          position_actions: p.position_actions?.map((a) =>
+            a.id === actionId ? { ...a, execution_state: "acknowledged" as const } : a
+          ),
+        }))
+      );
+      await positionActionsApi.updateState(actionId, "acknowledged");
+    } catch (err: any) {
+      setError(err.message);
+      loadPositions();
+    }
+  }
+
+  async function handleExecuteAction(actionId: string) {
+    try {
+      // Optimistic
+      setPositions((prev) =>
+        prev.map((p) => ({
+          ...p,
+          position_actions: p.position_actions?.map((a) =>
+            a.id === actionId ? { ...a, execution_state: "executed" as const } : a
+          ),
+        }))
+      );
+      await positionActionsApi.updateState(actionId, "executed");
+    } catch (err: any) {
+      setError(err.message);
+      loadPositions();
+    }
+  }
+
+  // ─── Delete position ─────────────────────────────────────────────────────
+
+  async function handleDeletePosition(positionId: string) {
+    if (deletingId === positionId) {
+      try {
+        setPositions((prev) => prev.filter((p) => p.id !== positionId));
+        setDeletingId(null);
+        await positionsApi.delete(positionId);
+      } catch (err: any) {
+        setError(err.message);
+        loadPositions();
+      }
+    } else {
+      setDeletingId(positionId);
+    }
+  }
+
+  // ─── Counts ────────────────────────────────────���──────────────────────────
+
+  const openCount = positions.filter((p) => p.status === "open").length;
+
+  const tabs: { key: TabFilter; label: string }[] = [
+    { key: "open", label: "Öppna" },
+    { key: "closed", label: "Stängda" },
+    { key: "all", label: "Alla" },
+  ];
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">📈 Positions</h1>
-        <div className="flex gap-2">
-          {["open", "closed", "all"].map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                filter === f
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-700 text-gray-400 hover:text-white"
-              }`}
-            >
-              {f.charAt(0).toUpperCase() + f.slice(1)}
-            </button>
-          ))}
-        </div>
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-bold text-white">📈 Positioner</h1>
       </div>
 
+      {/* Tabs */}
+      <div className="flex items-center gap-1 bg-gray-800/50 border border-gray-700 rounded-lg p-1">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-3 py-1.5 rounded-md text-xs font-mono transition-all ${
+              tab === t.key
+                ? "bg-gray-700 text-white shadow-sm"
+                : "text-gray-400 hover:text-gray-300"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Error */}
       {error && (
-        <div className="card border-red-500/50">
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-2 flex items-center justify-between">
           <p className="text-red-400 text-sm">{error}</p>
+          <button onClick={() => setError("")} className="text-red-400 text-xs hover:text-red-300">
+            ✕
+          </button>
         </div>
       )}
 
+      {/* Positions */}
       {loading ? (
-        <div className="text-gray-400">Loading positions...</div>
+        <div className="text-gray-500 font-mono text-sm py-8 text-center">
+          Laddar positioner...
+        </div>
       ) : positions.length === 0 ? (
-        <div className="card">
-          <p className="text-gray-400">No positions found</p>
+        <div className="bg-gray-800/50 border border-gray-700 rounded-lg py-12 text-center">
+          <p className="text-gray-500 font-mono text-sm">Inga positioner hittades</p>
         </div>
       ) : (
         <div className="space-y-3">
           {positions.map((pos) => (
-            <div key={pos.id} className="card">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div>
-                    <span className="text-lg font-bold text-white">
-                      {pos.ticker}
-                    </span>
-                    <span
-                      className={`ml-2 badge ${
-                        pos.direction === "long"
-                          ? "bg-green-500/20 text-green-400"
-                          : "bg-red-500/20 text-red-400"
-                      }`}
-                    >
-                      {pos.direction.toUpperCase()}
-                    </span>
-                  </div>
-                  <span
-                    className={`badge ${
-                      pos.status === "open" ? "badge-open" : "badge-closed"
-                    }`}
-                  >
-                    {pos.status.toUpperCase()}
+            <div key={pos.id}>
+              <PositionCard
+                position={pos}
+                onClose={handleClosePosition}
+                onPartialClose={handlePartialClose}
+                onUpdateStop={handleUpdateStop}
+                onAcknowledgeAction={handleAcknowledgeAction}
+                onExecuteAction={handleExecuteAction}
+              />
+
+              {/* Close form */}
+              {closingId === pos.id && (
+                <div className="bg-red-500/5 border border-gray-700 rounded-b-lg px-4 py-3 -mt-1 flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-mono text-red-400 uppercase tracking-wider">
+                    Stäng position:
                   </span>
+                  <input
+                    type="number"
+                    placeholder="Exit price"
+                    value={exitPrice}
+                    onChange={(e) => setExitPrice(e.target.value)}
+                    className="w-28 bg-gray-800 border border-gray-600 rounded-md px-2 py-1 text-xs font-mono text-white focus:border-red-500 outline-none"
+                    step="0.01"
+                    autoFocus
+                  />
+                  <input
+                    type="number"
+                    placeholder="Avgifter"
+                    value={closeFees}
+                    onChange={(e) => setCloseFees(e.target.value)}
+                    className="w-24 bg-gray-800 border border-gray-600 rounded-md px-2 py-1 text-xs font-mono text-white outline-none"
+                    step="0.01"
+                  />
+                  <button
+                    onClick={() => handleClosePosition(pos.id)}
+                    className="bg-red-600 hover:bg-red-700 text-white font-mono text-[11px] px-3 py-1 rounded-md transition-colors"
+                  >
+                    Stäng
+                  </button>
+                  <button
+                    onClick={() => setClosingId(null)}
+                    className="text-gray-400 font-mono text-[11px] px-3 py-1 rounded-md hover:bg-gray-700 transition-colors"
+                  >
+                    Avbryt
+                  </button>
                 </div>
-
-                <div className="flex items-center gap-4 text-sm">
-                  <div className="text-right">
-                    <p className="text-gray-400">Entry</p>
-                    <p className="text-white">{pos.entry_price.toFixed(2)}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-gray-400">SL</p>
-                    <p className="text-red-400">
-                      {pos.stop_loss?.toFixed(2) || "-"}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-gray-400">TP</p>
-                    <p className="text-green-400">
-                      {pos.take_profit?.toFixed(2) || "-"}
-                    </p>
-                  </div>
-                  {pos.quantity && (
-                    <div className="text-right">
-                      <p className="text-gray-400">Qty</p>
-                      <p className="text-white">{pos.quantity}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {pos.notes && (
-                <p className="text-sm text-gray-400 mt-2">{pos.notes}</p>
               )}
 
-              <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-700/50">
-                <div className="text-xs text-gray-400">
-                  Opened: {new Date(pos.opened_at).toLocaleString()}
-                  {pos.closed_at && (
-                    <> • Closed: {new Date(pos.closed_at).toLocaleString()}</>
+              {/* Partial close form */}
+              {partialClosingId === pos.id && (
+                <div className="bg-cyan-500/5 border border-gray-700 rounded-b-lg px-4 py-3 -mt-1 flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-wider">
+                    Delsälj:
+                  </span>
+                  <input
+                    type="number"
+                    placeholder="Exit price"
+                    value={partialExitPrice}
+                    onChange={(e) => setPartialExitPrice(e.target.value)}
+                    className="w-28 bg-gray-800 border border-gray-600 rounded-md px-2 py-1 text-xs font-mono text-white focus:border-cyan-500 outline-none"
+                    step="0.01"
+                    autoFocus
+                  />
+                  <input
+                    type="number"
+                    placeholder="Antal"
+                    value={partialQuantity}
+                    onChange={(e) => setPartialQuantity(e.target.value)}
+                    className="w-24 bg-gray-800 border border-gray-600 rounded-md px-2 py-1 text-xs font-mono text-white focus:border-cyan-500 outline-none"
+                  />
+                  <input
+                    type="number"
+                    placeholder="Avgifter"
+                    value={partialFees}
+                    onChange={(e) => setPartialFees(e.target.value)}
+                    className="w-24 bg-gray-800 border border-gray-600 rounded-md px-2 py-1 text-xs font-mono text-white outline-none"
+                    step="0.01"
+                  />
+                  {pos.remaining_quantity && (
+                    <div className="flex gap-1">
+                      {[25, 50, 75].map((pct) => (
+                        <button
+                          key={pct}
+                          onClick={() =>
+                            setPartialQuantity(
+                              Math.floor(
+                                (pos.remaining_quantity! * pct) / 100
+                              ).toString()
+                            )
+                          }
+                          className="text-[10px] font-mono text-cyan-400 border border-cyan-500/30 px-1.5 py-0.5 rounded hover:bg-cyan-500/10 transition-colors"
+                        >
+                          {pct}%
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => handlePartialClose(pos.id)}
+                    className="bg-cyan-600 hover:bg-cyan-700 text-white font-mono text-[11px] px-3 py-1 rounded-md transition-colors"
+                  >
+                    Sälj
+                  </button>
+                  <button
+                    onClick={() => setPartialClosingId(null)}
+                    className="text-gray-400 font-mono text-[11px] px-3 py-1 rounded-md hover:bg-gray-700 transition-colors"
+                  >
+                    Avbryt
+                  </button>
+                </div>
+              )}
+
+              {/* Delete button for closed positions */}
+              {pos.status === "closed" && (
+                <div className="flex justify-end px-4 py-1.5">
+                  {deletingId === pos.id ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-red-400">
+                        Säker? Kan inte ångras.
+                      </span>
+                      <button
+                        onClick={() => handleDeletePosition(pos.id)}
+                        className="text-[10px] font-mono text-red-400 border border-red-500/30 px-2 py-0.5 rounded hover:bg-red-500/10 transition-colors"
+                      >
+                        Ja, ta bort
+                      </button>
+                      <button
+                        onClick={() => setDeletingId(null)}
+                        className="text-[10px] font-mono text-gray-500 px-2 py-0.5 rounded hover:bg-gray-700 transition-colors"
+                      >
+                        Avbryt
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setDeletingId(pos.id)}
+                      className="text-[10px] font-mono text-gray-600 hover:text-red-400 transition-colors"
+                    >
+                      🗑 Ta bort
+                    </button>
                   )}
                 </div>
-
-                {pos.status === "open" && (
-                  <div>
-                    {closingPosition === pos.id ? (
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          placeholder="Exit price"
-                          value={exitPrice}
-                          onChange={(e) => setExitPrice(e.target.value)}
-                          className="w-28 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
-                          step="0.01"
-                        />
-                        <input
-                          type="number"
-                          placeholder="Fees"
-                          value={fees}
-                          onChange={(e) => setFees(e.target.value)}
-                          className="w-20 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
-                          step="0.01"
-                        />
-                        <button
-                          onClick={() => handleClosePosition(pos.id)}
-                          className="btn-danger text-xs py-1 px-3"
-                        >
-                          Close
-                        </button>
-                        <button
-                          onClick={() => setClosingPosition(null)}
-                          className="btn-secondary text-xs py-1 px-3"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setClosingPosition(pos.id)}
-                        className="btn-danger text-xs py-1 px-3"
-                      >
-                        Close Position
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
+              )}
             </div>
           ))}
         </div>

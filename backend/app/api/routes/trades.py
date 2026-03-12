@@ -102,3 +102,24 @@ async def get_trade(
     if not res.data:
         raise HTTPException(status_code=404, detail="Trade not found")
     return res.data
+
+
+@router.delete("/{trade_id}")
+async def delete_trade(
+    trade_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Delete a trade record (for error correction)."""
+    sb = get_supabase()
+    res = (
+        sb.table("trades")
+        .select("id")
+        .eq("id", trade_id)
+        .single()
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Trade not found")
+
+    sb.table("trades").delete().eq("id", trade_id).execute()
+    return {"deleted": True}

@@ -9,6 +9,11 @@ import type {
   UpdateSignal,
   CreatePositionFromSignal,
   ClosePosition,
+  PartialClosePosition,
+  UpdatePosition,
+  PositionAction,
+  CreatePositionAction,
+  PartialExit,
 } from "@/types";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace(/\/+$/, "");
@@ -103,10 +108,58 @@ export const positionsApi = {
       body: JSON.stringify(data),
     }),
 
+  update: (id: string, data: UpdatePosition) =>
+    apiFetch<Position>(`/positions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
   close: (id: string, data: ClosePosition) =>
     apiFetch<Trade>(`/positions/${id}/close`, {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+
+  partialClose: (id: string, data: PartialClosePosition) =>
+    apiFetch<{ partial_exit: PartialExit; remaining_quantity: number; position_closed: boolean }>(
+      `/positions/${id}/partial-close`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      }
+    ),
+
+  delete: (id: string) =>
+    apiFetch<{ deleted: boolean }>(`/positions/${id}`, {
+      method: "DELETE",
+    }),
+};
+
+// ─── Position Actions ───────────────────────────────────────────────────────
+
+export const positionActionsApi = {
+  listForPosition: (positionId: string, state?: string) => {
+    const qs = state ? `?state=${state}` : "";
+    return apiFetch<PositionAction[]>(`/position-actions/by-position/${positionId}${qs}`);
+  },
+
+  listPending: () => apiFetch<PositionAction[]>("/position-actions/pending"),
+
+  create: (data: CreatePositionAction) =>
+    apiFetch<PositionAction>("/position-actions/", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateState: (actionId: string, execution_state: string) =>
+    apiFetch<PositionAction>(`/position-actions/${actionId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ execution_state }),
+    }),
+
+  delete: (actionId: string) =>
+    apiFetch<{ deleted: boolean }>(`/position-actions/${actionId}`, {
+      method: "DELETE",
     }),
 };
 
@@ -128,4 +181,9 @@ export const tradesApi = {
   },
 
   get: (id: string) => apiFetch<Trade>(`/trades/${id}`),
+
+  delete: (id: string) =>
+    apiFetch<{ deleted: boolean }>(`/trades/${id}`, {
+      method: "DELETE",
+    }),
 };
