@@ -1,52 +1,27 @@
-type BadgeVariant =
-  | "long"
-  | "short"
-  | "pending"
-  | "taken"
-  | "skipped"
-  | "expired"
-  | "win"
-  | "loss"
-  | "breakeven"
-  | "open"
-  | "closed"
-  | "se"
-  | "us"
-  | "leverage"
-  | "stock"
-  | "raise_stop"
-  | "move_stop_to_breakeven"
-  | "take_partial"
-  | "reduce_position"
-  | "close_full"
-  | "hold"
-  | "acknowledged"
-  | "executed";
-
 const styles: Record<string, string> = {
-  long: "bg-green-500/20 text-green-400",
-  short: "bg-red-500/20 text-red-400",
-  pending: "bg-amber-500/20 text-amber-400",
-  taken: "bg-blue-500/20 text-blue-400",
-  skipped: "bg-gray-500/20 text-gray-400",
-  expired: "bg-gray-600/20 text-gray-500",
-  win: "bg-green-500/20 text-green-400",
-  loss: "bg-red-500/20 text-red-400",
-  breakeven: "bg-gray-500/20 text-gray-400",
-  open: "bg-cyan-500/20 text-cyan-400",
-  closed: "bg-gray-500/20 text-gray-400",
-  se: "bg-indigo-500/20 text-indigo-400",
-  us: "bg-orange-500/20 text-orange-400",
-  leverage: "bg-purple-500/20 text-purple-400",
-  stock: "bg-gray-500/20 text-gray-400",
-  raise_stop: "bg-amber-500/20 text-amber-400",
-  move_stop_to_breakeven: "bg-blue-500/20 text-blue-400",
-  take_partial: "bg-cyan-500/20 text-cyan-400",
-  reduce_position: "bg-orange-500/20 text-orange-400",
-  close_full: "bg-red-500/20 text-red-400",
-  hold: "bg-green-500/20 text-green-400",
-  acknowledged: "bg-blue-500/20 text-blue-400",
-  executed: "bg-green-500/20 text-green-400",
+  long: "bg-[var(--green3)] text-[var(--green)]",
+  short: "bg-[var(--red2)] text-[var(--red)]",
+  pending: "bg-[var(--amber2)] text-[var(--amber)]",
+  taken: "bg-[var(--blue2)] text-[var(--blue)]",
+  skipped: "bg-[var(--cream3)] text-[var(--ink3)]",
+  expired: "bg-[var(--red2)] text-[var(--red)]",
+  win: "bg-[var(--green3)] text-[var(--green)]",
+  loss: "bg-[var(--red2)] text-[var(--red)]",
+  breakeven: "bg-[var(--cream3)] text-[var(--ink3)]",
+  open: "bg-[var(--blue2)] text-[var(--blue)]",
+  closed: "bg-[var(--cream3)] text-[var(--ink3)]",
+  se: "bg-[#E6EAF6] text-[#2A3F82]",
+  us: "bg-[#F4E6E0] text-[#82271A]",
+  leverage: "bg-[var(--purple2)] text-[var(--purple)]",
+  stock: "bg-[var(--cream3)] text-[var(--ink3)]",
+  raise_stop: "bg-[var(--amber2)] text-[var(--amber)]",
+  move_stop_to_breakeven: "bg-[var(--blue2)] text-[var(--blue)]",
+  take_partial: "bg-[#E0F0F4] text-[#1A5C6A]",
+  reduce_position: "bg-[#F4E6E0] text-[#82271A]",
+  close_full: "bg-[var(--red2)] text-[var(--red)]",
+  hold: "bg-[var(--green3)] text-[var(--green)]",
+  acknowledged: "bg-[var(--blue2)] text-[var(--blue)]",
+  executed: "bg-[var(--green3)] text-[var(--green)]",
 };
 
 export function Badge({
@@ -60,8 +35,8 @@ export function Badge({
 }) {
   return (
     <span
-      className={`inline-flex items-center text-[10px] font-mono font-medium tracking-wide px-2 py-0.5 rounded-md uppercase ${
-        styles[variant] || "bg-gray-500/20 text-gray-400"
+      className={`inline-flex items-center text-[9px] font-['DM_Mono',monospace] font-medium tracking-[0.7px] px-[7px] py-[3px] rounded-[3px] uppercase ${
+        styles[variant] || "bg-[var(--cream3)] text-[var(--ink3)]"
       } ${className}`}
     >
       {children}

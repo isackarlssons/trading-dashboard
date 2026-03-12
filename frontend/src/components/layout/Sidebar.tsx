@@ -5,24 +5,33 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: "📊" },
-  { href: "/signals", label: "Signaler", icon: "📡" },
-  { href: "/positions", label: "Positioner", icon: "📈" },
-  { href: "/trades", label: "Trades", icon: "📋" },
+  { href: "/", label: "Översikt", icon: "◆" },
+  { href: "/signals", label: "Signaler", icon: "✎" },
+  { href: "/positions", label: "Positioner", icon: "□" },
+  { href: "/trades", label: "Trades", icon: "≡" },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({
+  pendingSignalCount,
+}: {
+  pendingSignalCount?: number;
+}) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
     <>
       {/* Mobile header bar */}
-      <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-gray-900/95 backdrop-blur-sm border-b border-gray-700 px-4 py-3 flex items-center justify-between">
-        <h1 className="text-sm font-bold text-white">⚡ Trading</h1>
+      <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-[var(--ink)] px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-[var(--green2)]" />
+          <h1 className="font-['Fraunces'] text-sm font-bold text-white italic">
+            Trading
+          </h1>
+        </div>
         <button
           onClick={() => setMobileOpen(!mobileOpen)}
-          className="text-gray-400 hover:text-white transition-colors p-1"
+          className="text-[var(--ink4)] hover:text-white transition-colors p-1"
         >
           {mobileOpen ? (
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -39,7 +48,7 @@ export default function Sidebar() {
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
-          className="lg:hidden fixed inset-0 z-40 bg-black/50"
+          className="lg:hidden fixed inset-0 z-40 bg-black/30"
           onClick={() => setMobileOpen(false)}
         />
       )}
@@ -48,16 +57,27 @@ export default function Sidebar() {
       <aside
         className={`
           fixed lg:static z-40 top-0 left-0 h-full
-          w-56 bg-gray-900/95 backdrop-blur-sm border-r border-gray-700 p-4 flex flex-col
+          w-[200px] bg-[var(--ink)] p-5 flex flex-col
           transition-transform duration-200 ease-in-out
           ${mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
           lg:min-h-screen
         `}
       >
-        <div className="mb-6 mt-2 lg:mt-0">
-          <h1 className="text-lg font-bold text-white">⚡ Trading</h1>
-          <p className="text-[10px] text-gray-500 font-mono mt-0.5">Dashboard v2.0</p>
+        <div className="mb-8 mt-2 lg:mt-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-2 h-2 rounded-full bg-[var(--green2)]" />
+            <h1 className="font-['Fraunces'] text-lg font-bold text-white italic">
+              Trading
+            </h1>
+          </div>
+          <p className="text-[9px] font-['DM_Mono',monospace] text-[var(--ink4)] uppercase tracking-[1.5px] ml-4">
+            Dashboard v1.0
+          </p>
         </div>
+
+        <p className="text-[8px] font-['DM_Mono',monospace] text-[var(--ink4)] uppercase tracking-[1.5px] mb-3">
+          Navigering
+        </p>
 
         <nav className="flex-1 space-y-0.5">
           {navItems.map((item) => {
@@ -69,22 +89,27 @@ export default function Sidebar() {
                 key={item.href}
                 href={item.href}
                 onClick={() => setMobileOpen(false)}
-                className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`flex items-center justify-between px-3 py-2 rounded-[var(--r-sm)] text-[13px] font-medium transition-colors ${
                   isActive
-                    ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                    : "text-gray-400 hover:text-white hover:bg-gray-800"
+                    ? "bg-[var(--green)] text-white"
+                    : "text-[var(--ink4)] hover:text-white hover:bg-white/5"
                 }`}
               >
-                <span className="text-sm">{item.icon}</span>
-                <span>{item.label}</span>
+                <div className="flex items-center gap-2.5">
+                  <span className="text-[11px] opacity-70">{item.icon}</span>
+                  <span>{item.label}</span>
+                </div>
+                {item.href === "/signals" &&
+                  pendingSignalCount != null &&
+                  pendingSignalCount > 0 && (
+                    <span className="bg-[var(--green2)] text-white text-[9px] font-['DM_Mono',monospace] w-5 h-5 rounded-full flex items-center justify-center">
+                      {pendingSignalCount}
+                    </span>
+                  )}
               </Link>
             );
           })}
         </nav>
-
-        <div className="mt-auto pt-4 border-t border-gray-700">
-          <p className="text-[10px] text-gray-600 font-mono">Single user mode</p>
-        </div>
       </aside>
     </>
   );

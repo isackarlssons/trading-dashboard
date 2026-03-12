@@ -7,7 +7,7 @@ export function Card({
 }) {
   return (
     <div
-      className={`bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-lg overflow-hidden ${className}`}
+      className={`bg-[var(--surface)] border border-[var(--border)] rounded-[var(--r)] shadow-[var(--shadow)] overflow-hidden ${className}`}
     >
       {children}
     </div>
@@ -23,7 +23,7 @@ export function CardHeader({
 }) {
   return (
     <div
-      className={`flex items-center gap-3 px-5 py-3.5 border-b border-gray-700 ${className}`}
+      className={`flex items-center gap-[9px] px-[22px] py-[16px] border-b border-[var(--border)] ${className}`}
     >
       {children}
     </div>
@@ -32,6 +32,8 @@ export function CardHeader({
 
 export function CardTitle({ children }: { children: React.ReactNode }) {
   return (
-    <h2 className="font-semibold text-sm text-white flex-1">{children}</h2>
+    <h2 className="font-['Fraunces'] font-semibold text-[14px] tracking-[-0.1px] flex-1 text-[var(--ink)]">
+      {children}
+    </h2>
   );
 }

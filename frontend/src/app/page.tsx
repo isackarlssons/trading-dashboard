@@ -4,6 +4,7 @@ import AppShell from "@/components/layout/AppShell";
 import { useEffect, useState } from "react";
 import { signalsApi, positionsApi, tradesApi, positionActionsApi } from "@/lib/api";
 import { Badge } from "@/components/ui/Badge";
+import { Card } from "@/components/ui/Card";
 import type { Signal, Position, TradeStats, PositionAction } from "@/types";
 
 export default function DashboardPage() {
@@ -48,285 +49,262 @@ function DashboardContent() {
 
   if (loading) {
     return (
-      <div className="text-gray-500 font-mono text-sm py-12 text-center">
-        Laddar dashboard...
+      <div className="text-[var(--ink4)] font-['DM_Mono',monospace] text-xs py-12 text-center">
+        Laddar...
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-        <p className="text-red-400">Fel: {error}</p>
-        <button onClick={loadDashboard} className="btn-secondary mt-2">
+      <Card className="p-5">
+        <p className="text-[var(--red)] text-sm">Fel: {error}</p>
+        <button
+          onClick={loadDashboard}
+          className="mt-2 font-['DM_Mono',monospace] text-[11px] text-[var(--ink2)] border border-[var(--border2)] px-3 py-1.5 rounded-[var(--r-sm)] hover:bg-[var(--cream2)] transition-colors cursor-pointer"
+        >
           Försök igen
         </button>
-      </div>
+      </Card>
     );
   }
 
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("sv-SE", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="font-['Fraunces'] text-[22px] font-semibold text-[var(--ink)]">
+          Översikt
+        </h1>
+        <span className="font-['DM_Mono',monospace] text-[10px] text-[var(--ink4)]">
+          {dateStr}
+        </span>
+      </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          label="Väntande signaler"
+          label="Pending Signals"
           value={pendingSignals.length}
-          icon="📡"
-          color="amber"
+          sub={`${pendingSignals.length} signaler väntar`}
         />
         <StatCard
-          label="Öppna positioner"
+          label="Öppna Positioner"
           value={openPositions.length}
-          icon="📈"
-          color="cyan"
+          sub="Just nu"
         />
         <StatCard
-          label="Totalt trades"
+          label="Totalt Trades"
           value={stats?.total_trades || 0}
-          icon="📋"
-          color="blue"
+          sub="Historik"
         />
         <StatCard
           label="Win Rate"
           value={`${stats?.win_rate || 0}%`}
-          icon="🎯"
-          color={(stats?.win_rate || 0) >= 50 ? "green" : "red"}
-        />
-        <StatCard
-          label="Aktiva actions"
-          value={pendingActions.length}
-          icon="⚡"
-          color={pendingActions.length > 0 ? "amber" : "gray"}
+          sub={`${stats?.wins || 0} vinster · ${stats?.losses || 0} förluster`}
+          highlight={(stats?.win_rate || 0) >= 50}
         />
       </div>
 
       {/* Stats Detail */}
       {stats && stats.total_trades > 0 && (
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-white mb-3">
-            Trading-statistik
-          </h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div>
-              <p className="text-[10px] font-mono text-gray-500 uppercase tracking-wider">
-                Vinster / Förluster
-              </p>
-              <p className="text-white font-mono text-sm mt-0.5">
-                <span className="text-green-400">{stats.wins}</span>
-                {" / "}
-                <span className="text-red-400">{stats.losses}</span>
-                {stats.breakeven > 0 && (
-                  <span className="text-gray-500"> / {stats.breakeven} BE</span>
-                )}
-              </p>
-            </div>
-            <div>
-              <p className="text-[10px] font-mono text-gray-500 uppercase tracking-wider">
-                Snitt P&L %
-              </p>
-              <p
-                className={`font-mono text-sm mt-0.5 ${
-                  stats.avg_pnl_percent >= 0 ? "text-green-400" : "text-red-400"
-                }`}
-              >
-                {stats.avg_pnl_percent > 0 ? "+" : ""}
-                {stats.avg_pnl_percent}%
-              </p>
-            </div>
-            <div>
-              <p className="text-[10px] font-mono text-gray-500 uppercase tracking-wider">
-                Bästa / Sämsta
-              </p>
-              <p className="text-white font-mono text-sm mt-0.5">
-                <span className="text-green-400">+{stats.best_trade || 0}%</span>
-                {" / "}
-                <span className="text-red-400">{stats.worst_trade || 0}%</span>
-              </p>
-            </div>
-            <div>
-              <p className="text-[10px] font-mono text-gray-500 uppercase tracking-wider">
-                Profit Factor
-              </p>
-              <p className="text-white font-mono text-sm mt-0.5">
-                {stats.profit_factor || "N/A"}
-              </p>
+        <Card>
+          <div className="px-[22px] py-[16px]">
+            <h2 className="font-['Fraunces'] font-semibold text-[14px] text-[var(--ink)] mb-4">
+              Trading Statistik
+            </h2>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+              <div>
+                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">
+                  Vinster / Förluster
+                </p>
+                <p className="font-['Fraunces'] text-[22px] font-bold text-[var(--ink)]">
+                  <span style={{ color: "var(--green)" }}>{stats.wins}</span>
+                  <span className="text-[var(--ink4)]"> / </span>
+                  <span style={{ color: "var(--red)" }}>{stats.losses}</span>
+                </p>
+              </div>
+              <div>
+                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">
+                  Avg P&L %
+                </p>
+                <p
+                  className="font-['Fraunces'] text-[22px] font-bold"
+                  style={{
+                    color:
+                      stats.avg_pnl_percent >= 0 ? "var(--green)" : "var(--red)",
+                  }}
+                >
+                  {stats.avg_pnl_percent > 0 ? "+" : ""}
+                  {stats.avg_pnl_percent}%
+                </p>
+              </div>
+              <div>
+                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">
+                  Bäst / Sämst
+                </p>
+                <p className="font-['Fraunces'] text-[22px] font-bold text-[var(--ink)]">
+                  <span style={{ color: "var(--green)" }}>
+                    +{stats.best_trade || 0}%
+                  </span>
+                  <span className="text-[var(--ink4)]"> / </span>
+                  <span style={{ color: "var(--red)" }}>
+                    {stats.worst_trade || 0}%
+                  </span>
+                </p>
+              </div>
+              <div>
+                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">
+                  Profit Factor
+                </p>
+                <p className="font-['Fraunces'] text-[22px] font-bold text-[var(--ink)]">
+                  {stats.profit_factor || "N/A"}
+                </p>
+              </div>
             </div>
           </div>
-        </div>
+        </Card>
       )}
 
-      {/* Pending Actions Alert */}
-      {pendingActions.length > 0 && (
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-amber-400 mb-2">
-            ⚡ {pendingActions.length} väntande management actions
-          </h2>
-          <p className="text-xs text-gray-400 mb-2">
-            Boten har skickat instruktioner för dina öppna positioner.
-          </p>
-          <a
-            href="/positions"
-            className="text-xs font-mono text-amber-400 underline hover:text-amber-300"
-          >
-            Gå till Positioner →
-          </a>
-        </div>
-      )}
-
-      {/* Pending Signals */}
-      <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
-        <h2 className="text-sm font-semibold text-white mb-3">
-          📡 Väntande signaler ({pendingSignals.length})
-        </h2>
-        {pendingSignals.length === 0 ? (
-          <p className="text-gray-500 text-xs font-mono">Inga väntande signaler</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-gray-500 border-b border-gray-700 text-[9px] font-mono uppercase tracking-wider">
-                  <th className="text-left py-2">Ticker</th>
-                  <th className="text-left py-2">Dir</th>
-                  <th className="text-right py-2">Entry</th>
-                  <th className="text-right py-2">SL</th>
-                  <th className="text-right py-2">TP</th>
-                  <th className="text-left py-2">Strategi</th>
-                  <th className="text-right py-2">Tid</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pendingSignals.slice(0, 10).map((signal) => (
-                  <tr
-                    key={signal.id}
-                    className="border-b border-gray-700/50 hover:bg-gray-700/20"
-                  >
-                    <td className="py-2 font-medium text-white font-mono">
-                      {signal.ticker}
-                      {signal.execution_type === "leverage" && (
-                        <span className="ml-1 text-purple-400 text-[9px]">⚡</span>
-                      )}
-                    </td>
-                    <td className="py-2">
-                      <Badge variant={signal.direction}>
-                        {signal.direction.toUpperCase()}
-                      </Badge>
-                    </td>
-                    <td className="py-2 text-right text-gray-300 font-mono">
-                      {signal.entry_price?.toFixed(2) || "-"}
-                    </td>
-                    <td className="py-2 text-right text-red-400 font-mono">
-                      {signal.stop_loss?.toFixed(2) || "-"}
-                    </td>
-                    <td className="py-2 text-right text-green-400 font-mono">
-                      {signal.take_profit?.toFixed(2) || "-"}
-                    </td>
-                    <td className="py-2 text-gray-500 font-mono">
-                      {signal.strategies?.name || signal.strategy?.name || "-"}
-                    </td>
-                    <td className="py-2 text-right text-gray-500 font-mono text-[10px]">
-                      {new Date(signal.signal_time).toLocaleString("sv-SE", {
-                        month: "short",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {pendingSignals.length > 10 && (
+      {/* Two column layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Pending Signals */}
+        <Card>
+          <div className="flex items-center justify-between px-[22px] py-[14px] border-b border-[var(--border)]">
+            <h2 className="font-['Fraunces'] font-semibold text-[14px] text-[var(--ink)]">
+              Pending Signals
+            </h2>
+            <div className="flex items-center gap-2">
+              <span className="font-['DM_Mono',monospace] text-[10px] bg-[var(--cream2)] text-[var(--ink3)] px-2 py-0.5 rounded-full">
+                {pendingSignals.length}
+              </span>
               <a
                 href="/signals"
-                className="block text-center text-xs font-mono text-blue-400 py-2 hover:text-blue-300"
+                className="font-['DM_Mono',monospace] text-[10px] text-[var(--ink3)] border border-[var(--border)] px-2 py-0.5 rounded-[var(--r-sm)] hover:bg-[var(--cream2)] transition-colors"
               >
-                Visa alla {pendingSignals.length} signaler →
+                Visa alla →
               </a>
-            )}
+            </div>
           </div>
-        )}
-      </div>
+          {pendingSignals.length === 0 ? (
+            <div className="py-10 text-center font-['DM_Mono',monospace] text-[10.5px] text-[var(--ink4)]">
+              Inga väntande signaler
+            </div>
+          ) : (
+            <div>
+              {pendingSignals.slice(0, 6).map((signal) => {
+                const market =
+                  typeof signal.metadata === "object" &&
+                  signal.metadata !== null &&
+                  "market" in signal.metadata
+                    ? String(signal.metadata.market).toLowerCase()
+                    : null;
+                return (
+                  <div
+                    key={signal.id}
+                    className="flex items-center gap-[9px] px-[22px] py-[11px] border-b border-[var(--border)] last:border-0 hover:bg-[var(--cream)] transition-colors flex-wrap"
+                  >
+                    <span className="font-['Fraunces'] font-bold text-[14px] text-[var(--ink)] min-w-[80px]">
+                      {signal.ticker}
+                    </span>
+                    <Badge variant={signal.direction}>
+                      {signal.direction.toUpperCase()}
+                    </Badge>
+                    {market && (
+                      <Badge variant={market}>{market.toUpperCase()}</Badge>
+                    )}
+                    <span className="font-['DM_Mono',monospace] text-[9px] text-[var(--ink4)] ml-auto">
+                      {signal.strategies?.name || ""}
+                    </span>
+                    <div className="flex gap-3 font-['DM_Mono',monospace] text-[11px]">
+                      <span className="text-[var(--ink3)]">
+                        E {signal.entry_price?.toFixed(2)}
+                      </span>
+                      <span style={{ color: "var(--red)" }}>
+                        SL {signal.stop_loss?.toFixed(2)}
+                      </span>
+                      <span style={{ color: "var(--green)" }}>
+                        TP {signal.take_profit?.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              {pendingSignals.length > 6 && (
+                <a
+                  href="/signals"
+                  className="block text-center font-['DM_Mono',monospace] text-[10px] text-[var(--ink3)] py-2 hover:text-[var(--ink)] underline"
+                >
+                  +{pendingSignals.length - 6} fler · Visa alla
+                </a>
+              )}
+            </div>
+          )}
+        </Card>
 
-      {/* Open Positions */}
-      <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
-        <h2 className="text-sm font-semibold text-white mb-3">
-          📈 Öppna positioner ({openPositions.length})
-        </h2>
-        {openPositions.length === 0 ? (
-          <p className="text-gray-500 text-xs font-mono">Inga öppna positioner</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-gray-500 border-b border-gray-700 text-[9px] font-mono uppercase tracking-wider">
-                  <th className="text-left py-2">Ticker</th>
-                  <th className="text-left py-2">Dir</th>
-                  <th className="text-right py-2">Entry</th>
-                  <th className="text-right py-2">SL</th>
-                  <th className="text-right py-2">TP</th>
-                  <th className="text-right py-2">Qty</th>
-                  <th className="text-left py-2">Actions</th>
-                  <th className="text-right py-2">Öppnad</th>
-                </tr>
-              </thead>
-              <tbody>
-                {openPositions.map((pos) => {
-                  const pendingActs = (pos.position_actions || []).filter(
-                    (a) => a.execution_state === "pending"
-                  );
-                  return (
-                    <tr
-                      key={pos.id}
-                      className="border-b border-gray-700/50 hover:bg-gray-700/20"
-                    >
-                      <td className="py-2 font-medium text-white font-mono">
-                        {pos.ticker}
-                      </td>
-                      <td className="py-2">
-                        <Badge variant={pos.direction}>
-                          {pos.direction.toUpperCase()}
-                        </Badge>
-                      </td>
-                      <td className="py-2 text-right text-gray-300 font-mono">
-                        {pos.entry_price.toFixed(2)}
-                      </td>
-                      <td className="py-2 text-right text-red-400 font-mono">
-                        {pos.stop_loss?.toFixed(2) || "-"}
-                      </td>
-                      <td className="py-2 text-right text-green-400 font-mono">
-                        {pos.take_profit?.toFixed(2) || "-"}
-                      </td>
-                      <td className="py-2 text-right text-gray-300 font-mono">
-                        {pos.remaining_quantity != null
-                          ? `${pos.remaining_quantity}${
-                              pos.original_quantity
-                                ? `/${pos.original_quantity}`
-                                : ""
-                            }`
-                          : pos.quantity || "-"}
-                      </td>
-                      <td className="py-2">
-                        {pendingActs.length > 0 ? (
-                          <span className="text-amber-400 text-[10px] font-mono">
-                            ⚡ {pendingActs.length}
-                          </span>
-                        ) : (
-                          <span className="text-gray-600 text-[10px]">—</span>
-                        )}
-                      </td>
-                      <td className="py-2 text-right text-gray-500 font-mono text-[10px]">
-                        {new Date(pos.opened_at).toLocaleDateString("sv-SE")}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        {/* Open Positions */}
+        <Card>
+          <div className="flex items-center justify-between px-[22px] py-[14px] border-b border-[var(--border)]">
+            <h2 className="font-['Fraunces'] font-semibold text-[14px] text-[var(--ink)]">
+              Öppna Positioner
+            </h2>
+            <span className="font-['DM_Mono',monospace] text-[10px] bg-[var(--cream2)] text-[var(--ink3)] px-2 py-0.5 rounded-full">
+              {openPositions.length}
+            </span>
           </div>
-        )}
+          {openPositions.length === 0 ? (
+            <div className="py-10 text-center">
+              <div className="text-[var(--ink4)] text-lg mb-1">□</div>
+              <p className="font-['DM_Mono',monospace] text-[10.5px] text-[var(--ink4)]">
+                Inga öppna positioner
+              </p>
+            </div>
+          ) : (
+            <div>
+              {openPositions.map((pos) => {
+                const pendingActs = (pos.position_actions || []).filter(
+                  (a) => a.execution_state === "pending"
+                );
+                return (
+                  <div
+                    key={pos.id}
+                    className="flex items-center gap-[9px] px-[22px] py-[11px] border-b border-[var(--border)] last:border-0 hover:bg-[var(--cream)] transition-colors flex-wrap"
+                  >
+                    <span className="font-['Fraunces'] font-bold text-[14px] text-[var(--ink)] min-w-[80px]">
+                      {pos.ticker}
+                    </span>
+                    <Badge variant={pos.direction}>
+                      {pos.direction.toUpperCase()}
+                    </Badge>
+                    {pendingActs.length > 0 && (
+                      <span className="font-['DM_Mono',monospace] text-[9px] text-[var(--amber)]">
+                        ⚡ {pendingActs.length}
+                      </span>
+                    )}
+                    <div className="flex gap-3 font-['DM_Mono',monospace] text-[11px] ml-auto">
+                      <span className="text-[var(--ink3)]">
+                        {pos.entry_price.toFixed(2)}
+                      </span>
+                      <span style={{ color: "var(--red)" }}>
+                        {pos.stop_loss?.toFixed(2) || "-"}
+                      </span>
+                      <span style={{ color: "var(--green)" }}>
+                        {pos.take_profit?.toFixed(2) || "-"}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
       </div>
     </div>
   );
@@ -335,38 +313,45 @@ function DashboardContent() {
 function StatCard({
   label,
   value,
-  icon,
-  color,
+  sub,
+  highlight,
 }: {
   label: string;
   value: string | number;
-  icon: string;
-  color: string;
+  sub?: string;
+  highlight?: boolean;
 }) {
-  const colorMap: Record<string, string> = {
-    amber: "border-amber-500/30 text-amber-400",
-    cyan: "border-cyan-500/30 text-cyan-400",
-    blue: "border-blue-500/30 text-blue-400",
-    green: "border-green-500/30 text-green-400",
-    red: "border-red-500/30 text-red-400",
-    gray: "border-gray-600/30 text-gray-500",
-  };
-
   return (
     <div
-      className={`bg-gray-800/50 border rounded-lg p-3 ${
-        colorMap[color] || colorMap.blue
+      className={`rounded-[var(--r)] border border-[var(--border)] shadow-[var(--shadow)] p-5 ${
+        highlight
+          ? "bg-[var(--green)] text-white"
+          : "bg-[var(--surface)]"
       }`}
     >
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-[9px] font-mono text-gray-500 uppercase tracking-wider">
-            {label}
-          </p>
-          <p className="text-xl font-bold font-mono mt-0.5">{value}</p>
-        </div>
-        <span className="text-xl">{icon}</span>
-      </div>
+      <p
+        className={`font-['DM_Mono',monospace] text-[8px] uppercase tracking-[1px] mb-2 ${
+          highlight ? "text-white/70" : "text-[var(--ink4)]"
+        }`}
+      >
+        {label}
+      </p>
+      <p
+        className={`font-['Fraunces'] text-[32px] font-bold leading-none ${
+          highlight ? "text-white" : "text-[var(--ink)]"
+        }`}
+      >
+        {value}
+      </p>
+      {sub && (
+        <p
+          className={`font-['DM_Mono',monospace] text-[9px] mt-2 ${
+            highlight ? "text-white/60" : "text-[var(--ink4)]"
+          }`}
+        >
+          {sub}
+        </p>
+      )}
     </div>
   );
 }

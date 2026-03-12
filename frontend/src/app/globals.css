@@ -1,75 +1,51 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;0,9..144,700;0,9..144,900;1,9..144,400;1,9..144,700&family=DM+Mono:wght@300;400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --foreground-rgb: 255, 255, 255;
-  --background-start-rgb: 10, 10, 20;
-  --background-end-rgb: 15, 15, 30;
+  --cream: #F2EFE8;
+  --cream2: #EAE6DC;
+  --cream3: #DEDAD0;
+  --ink: #151510;
+  --ink2: #2C2A24;
+  --ink3: #706B5F;
+  --ink4: #9C9588;
+  --green: #1A5C30;
+  --green2: #1F7238;
+  --green3: #C6E4CE;
+  --green4: #E6F3EA;
+  --red: #8C1F1F;
+  --red2: #F4DCDC;
+  --red3: #D44;
+  --amber: #8A5A08;
+  --amber2: #FAF0D4;
+  --blue: #1A4F7A;
+  --blue2: #DCE9F4;
+  --purple: #5B3A8C;
+  --purple2: #EDE4F7;
+  --border: #D4CEBC;
+  --border2: #C2BBAA;
+  --surface: #FDFAF4;
+  --r: 8px;
+  --r-sm: 5px;
+  --shadow: 0 1px 3px rgba(21,21,16,.06), 0 1px 2px rgba(21,21,16,.04);
+  --shadow-md: 0 4px 14px rgba(21,21,16,.09), 0 2px 4px rgba(21,21,16,.04);
 }
 
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
 body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      rgb(var(--background-start-rgb)),
-      rgb(var(--background-end-rgb))
-    );
+  font-family: 'Fraunces', Georgia, serif;
+  background: var(--cream);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
   min-height: 100vh;
 }
 
 @layer base {
   * {
-    @apply border-gray-700;
-  }
-}
-
-@layer components {
-  .card {
-    @apply bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-lg p-4;
-  }
-
-  .btn-primary {
-    @apply bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors;
-  }
-
-  .btn-secondary {
-    @apply bg-gray-700 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-lg transition-colors;
-  }
-
-  .btn-success {
-    @apply bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors;
-  }
-
-  .btn-danger {
-    @apply bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors;
-  }
-
-  .badge {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
-  }
-
-  .badge-pending {
-    @apply badge bg-amber-500/20 text-amber-400;
-  }
-
-  .badge-taken {
-    @apply badge bg-blue-500/20 text-blue-400;
-  }
-
-  .badge-win {
-    @apply badge bg-green-500/20 text-green-400;
-  }
-
-  .badge-loss {
-    @apply badge bg-red-500/20 text-red-400;
-  }
-
-  .badge-open {
-    @apply badge bg-cyan-500/20 text-cyan-400;
-  }
-
-  .badge-closed {
-    @apply badge bg-gray-500/20 text-gray-400;
+    border-color: var(--border);
   }
 }
