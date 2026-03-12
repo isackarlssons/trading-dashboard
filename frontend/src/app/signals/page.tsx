@@ -5,9 +5,10 @@ import { useEffect, useState, useCallback } from "react";
 import { signalsApi, positionsApi, strategiesApi } from "@/lib/api";
 import { SignalRow } from "@/components/signals/SignalRow";
 import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
 import type { Signal, Strategy, CreatePositionFromSignal } from "@/types";
 
-type TabFilter = "all" | "pending" | "taken" | "skipped" | "expired";
+type TabFilter = "active" | "skipped" | "expired" | "all";
 
 export default function SignalsPage() {
   return (
@@ -19,7 +20,7 @@ export default function SignalsPage() {
 
 function SignalsContent() {
   const [signals, setSignals] = useState<Signal[]>([]);
-  const [tab, setTab] = useState<TabFilter>("all");
+  const [tab, setTab] = useState<TabFilter>("active");
   const [tickerSearch, setTickerSearch] = useState("");
   const [strategyFilter, setStrategyFilter] = useState("");
   const [marketFilter, setMarketFilter] = useState("");
@@ -29,10 +30,13 @@ function SignalsContent() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [generating, setGenerating] = useState(false);
 
-  // Take trade modal state
+  // Take trade state
   const [takingSignal, setTakingSignal] = useState<Signal | null>(null);
   const [entryPrice, setEntryPrice] = useState("");
   const [quantity, setQuantity] = useState("");
+
+  // Create signal form
+  const [showCreate, setShowCreate] = useState(false);
 
   useEffect(() => {
     strategiesApi.list().then(setStrategies).catch(console.error);
@@ -54,29 +58,33 @@ function SignalsContent() {
     }
   }, []);
 
+  // ─── Filter by tab ────────────────────────────────────────────────────────
   const filteredSignals = signals
     .filter((s) => {
-      if (tab === "all") return true;
-      return s.status === tab;
+      if (tab === "active") return s.status === "pending" || s.status === "taken";
+      if (tab === "skipped") return s.status === "skipped";
+      if (tab === "expired") return s.status === "expired";
+      return true;
     })
-    .filter((s) =>
-      tickerSearch ? s.ticker.toLowerCase().includes(tickerSearch.toLowerCase()) : true
-    )
+    .filter((s) => (tickerSearch ? s.ticker.toLowerCase().includes(tickerSearch.toLowerCase()) : true))
     .filter((s) => {
       if (!strategyFilter) return true;
-      const stratName = s.strategies?.name || s.strategy?.name || "";
-      return stratName === strategyFilter;
+      return (s.strategies?.name || s.strategy?.name || "") === strategyFilter;
     })
     .filter((s) => {
       if (!marketFilter) return true;
-      const market =
-        typeof s.metadata === "object" && s.metadata !== null && "market" in s.metadata
-          ? String(s.metadata.market).toLowerCase()
-          : "";
-      return market === marketFilter.toLowerCase();
+      const m = typeof s.metadata === "object" && s.metadata !== null && "market" in s.metadata ? String(s.metadata.market).toLowerCase() : "";
+      return m === marketFilter.toLowerCase();
     });
 
-  // Optimistic Take Trade
+  const counts = {
+    active: signals.filter((s) => s.status === "pending" || s.status === "taken").length,
+    skipped: signals.filter((s) => s.status === "skipped").length,
+    expired: signals.filter((s) => s.status === "expired").length,
+    all: signals.length,
+  };
+
+  // ─── Optimistic Take Trade ────────────────────────────────────────────────
   async function handleTakeSignal(signal: Signal) {
     if (takingSignal?.id === signal.id) {
       if (!entryPrice) return;
@@ -88,41 +96,38 @@ function SignalsContent() {
           stop_loss: signal.stop_loss || undefined,
           take_profit: signal.take_profit || undefined,
         };
-        setSignals((prev) =>
-          prev.map((s) => (s.id === signal.id ? { ...s, status: "taken" as const } : s))
-        );
+        setSignals((prev) => prev.map((s) => (s.id === signal.id ? { ...s, status: "taken" as const } : s)));
         setTakingSignal(null);
         setEntryPrice("");
         setQuantity("");
         await positionsApi.fromSignal(data);
       } catch (err: any) {
-        setSignals((prev) =>
-          prev.map((s) => (s.id === signal.id ? { ...s, status: "pending" as const } : s))
-        );
+        setSignals((prev) => prev.map((s) => (s.id === signal.id ? { ...s, status: "pending" as const } : s)));
         setError(err.message);
       }
     } else {
       setTakingSignal(signal);
-      setEntryPrice(signal.entry_price?.toString() || "");
+      // For leverage signals, pre-fill with instrument_price if available
+      if (signal.execution_type === "leverage" && signal.instrument_price) {
+        setEntryPrice(signal.instrument_price.toString());
+      } else {
+        setEntryPrice(signal.entry_price?.toString() || "");
+      }
     }
   }
 
-  // Optimistic Skip
+  // ─── Optimistic Skip ──────────────────────────────────────────────────────
   async function handleSkipSignal(signalId: string) {
-    setSignals((prev) =>
-      prev.map((s) => (s.id === signalId ? { ...s, status: "skipped" as const } : s))
-    );
+    setSignals((prev) => prev.map((s) => (s.id === signalId ? { ...s, status: "skipped" as const } : s)));
     try {
       await signalsApi.update(signalId, { status: "skipped" });
     } catch (err: any) {
-      setSignals((prev) =>
-        prev.map((s) => (s.id === signalId ? { ...s, status: "pending" as const } : s))
-      );
+      setSignals((prev) => prev.map((s) => (s.id === signalId ? { ...s, status: "pending" as const } : s)));
       setError(err.message);
     }
   }
 
-  // Generate test signals
+  // ─── Generate test signals ────────────────────────────────────────────────
   async function handleGenerate(count: number) {
     if (strategies.length === 0) { setError("No strategies loaded"); return; }
     setGenerating(true); setError(""); setSuccess("");
@@ -164,54 +169,53 @@ function SignalsContent() {
     finally { setGenerating(false); }
   }
 
-  const tabs: { key: TabFilter; label: string }[] = [
-    { key: "all", label: "Alla" },
-    { key: "pending", label: "Pending" },
-    { key: "taken", label: "Tagna" },
-    { key: "skipped", label: "Skippade" },
-    { key: "expired", label: "Utgångna" },
+  // ─── Tabs config ──────────────────────────────────────────────────────────
+  const tabs: { key: TabFilter; label: string; count: number }[] = [
+    { key: "active", label: "Aktiva", count: counts.active },
+    { key: "skipped", label: "Skippade", count: counts.skipped },
+    { key: "expired", label: "Utgångna", count: counts.expired },
+    { key: "all", label: "Alla", count: counts.all },
   ];
 
   return (
     <div className="space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="font-['Fraunces'] text-[22px] font-semibold text-[var(--ink)]">
-          Signaler
-        </h1>
-        <div className="flex items-center gap-2">
-          {/* Tabs */}
+        <h1 className="font-['Fraunces'] text-[22px] font-semibold text-[var(--ink)]">Signaler</h1>
+        <div className="flex items-center gap-2 flex-wrap">
           <div className="flex bg-[var(--cream2)] border border-[var(--border)] rounded-[var(--r-sm)] p-[3px] gap-[2px]">
             {tabs.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
+              <button key={t.key} onClick={() => setTab(t.key)}
                 className={`px-[12px] py-[5px] text-[11px] font-['DM_Mono',monospace] rounded-[4px] border-0 cursor-pointer transition-all ${
-                  tab === t.key
-                    ? "bg-[var(--surface)] text-[var(--ink)] shadow-[var(--shadow)]"
-                    : "bg-transparent text-[var(--ink3)]"
-                }`}
-              >
-                {t.label}
+                  tab === t.key ? "bg-[var(--surface)] text-[var(--ink)] shadow-[var(--shadow)]" : "bg-transparent text-[var(--ink3)]"
+                }`}>
+                {t.label} <span className="opacity-50">{t.count}</span>
               </button>
             ))}
           </div>
-          <button
-            onClick={() => handleGenerate(3)}
-            disabled={generating}
-            className="bg-[var(--green)] text-white font-['DM_Mono',monospace] text-[11px] font-medium px-[12px] py-[7px] rounded-[var(--r-sm)] hover:bg-[var(--green2)] transition-colors border-0 cursor-pointer disabled:opacity-50"
-          >
+          <button onClick={() => setShowCreate(!showCreate)}
+            className="bg-[var(--blue)] text-white font-['DM_Mono',monospace] text-[11px] font-medium px-[12px] py-[7px] rounded-[var(--r-sm)] hover:opacity-90 transition-colors border-0 cursor-pointer">
+            + Ny signal
+          </button>
+          <button onClick={() => handleGenerate(3)} disabled={generating}
+            className="bg-[var(--green)] text-white font-['DM_Mono',monospace] text-[11px] font-medium px-[12px] py-[7px] rounded-[var(--r-sm)] hover:bg-[var(--green2)] transition-colors border-0 cursor-pointer disabled:opacity-50">
             Generera 3
           </button>
-          <button
-            onClick={() => handleGenerate(8)}
-            disabled={generating}
-            className="bg-[var(--green)] text-white font-['DM_Mono',monospace] text-[11px] font-medium px-[12px] py-[7px] rounded-[var(--r-sm)] hover:bg-[var(--green2)] transition-colors border-0 cursor-pointer disabled:opacity-50"
-          >
+          <button onClick={() => handleGenerate(8)} disabled={generating}
+            className="bg-[var(--green)] text-white font-['DM_Mono',monospace] text-[11px] font-medium px-[12px] py-[7px] rounded-[var(--r-sm)] hover:bg-[var(--green2)] transition-colors border-0 cursor-pointer disabled:opacity-50">
             Generera 8
           </button>
         </div>
       </div>
+
+      {/* Create Signal Form */}
+      {showCreate && (
+        <CreateSignalForm
+          strategies={strategies}
+          onCreated={() => { setShowCreate(false); loadSignals(); setSuccess("Signal skapad!"); setTimeout(() => setSuccess(""), 3000); }}
+          onCancel={() => setShowCreate(false)}
+        />
+      )}
 
       {success && (
         <div className="bg-[var(--green4)] border border-[var(--green3)] rounded-[var(--r-sm)] px-4 py-2">
@@ -229,97 +233,58 @@ function SignalsContent() {
       <Card>
         {/* Filter bar */}
         <div className="flex items-center gap-[10px] px-[22px] py-[11px] border-b border-[var(--border)] bg-[var(--cream)] flex-wrap">
-          <span className="font-['DM_Mono',monospace] text-[8.5px] text-[var(--ink4)] uppercase tracking-[1.1px]">
-            Filter
-          </span>
-          <input
-            type="text"
-            placeholder="Ticker…"
-            value={tickerSearch}
-            onChange={(e) => setTickerSearch(e.target.value)}
-            className="px-[9px] py-[5px] border border-[var(--border2)] rounded-[var(--r-sm)] text-[11.5px] font-['DM_Mono',monospace] bg-[var(--surface)] text-[var(--ink)] outline-none min-w-[126px] focus:border-[var(--green2)]"
-          />
-          <select
-            value={strategyFilter}
-            onChange={(e) => setStrategyFilter(e.target.value)}
-            className="px-[9px] py-[5px] border border-[var(--border2)] rounded-[var(--r-sm)] text-[11.5px] font-['DM_Mono',monospace] bg-[var(--surface)] text-[var(--ink)] outline-none cursor-pointer"
-          >
+          <span className="font-['DM_Mono',monospace] text-[8.5px] text-[var(--ink4)] uppercase tracking-[1.1px]">Filter</span>
+          <input type="text" placeholder="Ticker…" value={tickerSearch} onChange={(e) => setTickerSearch(e.target.value)}
+            className="px-[9px] py-[5px] border border-[var(--border2)] rounded-[var(--r-sm)] text-[11.5px] font-['DM_Mono',monospace] bg-[var(--surface)] text-[var(--ink)] outline-none min-w-[126px] focus:border-[var(--green2)]" />
+          <select value={strategyFilter} onChange={(e) => setStrategyFilter(e.target.value)}
+            className="px-[9px] py-[5px] border border-[var(--border2)] rounded-[var(--r-sm)] text-[11.5px] font-['DM_Mono',monospace] bg-[var(--surface)] text-[var(--ink)] outline-none cursor-pointer">
             <option value="">Alla strategier</option>
-            {strategies.map((s) => (
-              <option key={s.id} value={s.name}>{s.name}</option>
-            ))}
+            {strategies.map((s) => (<option key={s.id} value={s.name}>{s.name}</option>))}
           </select>
-          <select
-            value={marketFilter}
-            onChange={(e) => setMarketFilter(e.target.value)}
-            className="px-[9px] py-[5px] border border-[var(--border2)] rounded-[var(--r-sm)] text-[11.5px] font-['DM_Mono',monospace] bg-[var(--surface)] text-[var(--ink)] outline-none cursor-pointer"
-          >
+          <select value={marketFilter} onChange={(e) => setMarketFilter(e.target.value)}
+            className="px-[9px] py-[5px] border border-[var(--border2)] rounded-[var(--r-sm)] text-[11.5px] font-['DM_Mono',monospace] bg-[var(--surface)] text-[var(--ink)] outline-none cursor-pointer">
             <option value="">Alla marknader</option>
             <option value="SE">SE</option>
             <option value="US">US</option>
           </select>
           {(tickerSearch || strategyFilter || marketFilter) && (
-            <button
-              onClick={() => { setTickerSearch(""); setStrategyFilter(""); setMarketFilter(""); }}
-              className="text-[10px] text-[var(--ink4)] font-['DM_Mono',monospace] underline bg-transparent border-0 cursor-pointer hover:text-[var(--ink2)]"
-            >
-              Rensa
-            </button>
+            <button onClick={() => { setTickerSearch(""); setStrategyFilter(""); setMarketFilter(""); }}
+              className="text-[10px] text-[var(--ink4)] font-['DM_Mono',monospace] underline bg-transparent border-0 cursor-pointer hover:text-[var(--ink2)]">Rensa</button>
           )}
+          <span className="ml-auto font-['DM_Mono',monospace] text-[9px] text-[var(--ink4)]">{filteredSignals.length} signaler</span>
         </div>
 
         {/* Rows */}
         {loading ? (
-          <div className="py-[52px] text-center font-['DM_Mono',monospace] text-[10.5px] text-[var(--ink4)]">
-            Laddar signaler...
-          </div>
+          <div className="py-[52px] text-center font-['DM_Mono',monospace] text-[10.5px] text-[var(--ink4)]">Laddar signaler...</div>
         ) : filteredSignals.length === 0 ? (
-          <div className="py-[52px] text-center font-['DM_Mono',monospace] text-[10.5px] text-[var(--ink4)]">
-            Inga signaler hittades
-          </div>
+          <div className="py-[52px] text-center font-['DM_Mono',monospace] text-[10.5px] text-[var(--ink4)]">Inga signaler hittades</div>
         ) : (
           <div>
             {filteredSignals.map((signal) => (
               <div key={signal.id}>
-                <SignalRow
-                  signal={signal}
-                  onTake={handleTakeSignal}
-                  onSkip={handleSkipSignal}
-                />
+                <SignalRow signal={signal} onTake={handleTakeSignal} onSkip={handleSkipSignal} />
                 {/* Inline take form */}
                 {takingSignal?.id === signal.id && (
                   <div className="flex items-center gap-[8px] px-[22px] py-[10px] bg-[var(--green4)] border-b border-[var(--border)] flex-wrap">
                     <span className="font-['DM_Mono',monospace] text-[9px] text-[var(--green)] uppercase tracking-[1px]">
-                      Ta trade:
+                      {signal.execution_type === "leverage" ? "Ta leverage-trade:" : "Ta trade:"}
                     </span>
-                    <input
-                      type="number"
-                      placeholder="Entry price"
-                      value={entryPrice}
-                      onChange={(e) => setEntryPrice(e.target.value)}
-                      className="w-28 bg-[var(--surface)] border border-[var(--border2)] rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-['DM_Mono',monospace] text-[var(--ink)] focus:border-[var(--green2)] outline-none"
-                      step="0.01"
-                      autoFocus
-                    />
-                    <input
-                      type="number"
-                      placeholder="Antal (valfritt)"
-                      value={quantity}
-                      onChange={(e) => setQuantity(e.target.value)}
-                      className="w-28 bg-[var(--surface)] border border-[var(--border2)] rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-['DM_Mono',monospace] text-[var(--ink)] outline-none"
-                    />
-                    <button
-                      onClick={() => handleTakeSignal(signal)}
-                      className="bg-[var(--green)] text-white font-['DM_Mono',monospace] text-[11px] px-3 py-1 rounded-[var(--r-sm)] hover:bg-[var(--green2)] transition-colors cursor-pointer border-0"
-                    >
-                      Bekräfta
-                    </button>
-                    <button
-                      onClick={() => { setTakingSignal(null); setEntryPrice(""); setQuantity(""); }}
-                      className="text-[var(--ink3)] font-['DM_Mono',monospace] text-[11px] px-3 py-1 rounded-[var(--r-sm)] hover:bg-[var(--cream2)] transition-colors cursor-pointer border border-[var(--border)] bg-transparent"
-                    >
-                      Avbryt
-                    </button>
+                    {signal.execution_type === "leverage" && signal.execution_symbol && (
+                      <span className="font-['DM_Mono',monospace] text-[10px] text-[var(--purple)] bg-[var(--purple2)] px-2 py-0.5 rounded-[3px]">
+                        {signal.execution_symbol}
+                      </span>
+                    )}
+                    <input type="number" placeholder={signal.execution_type === "leverage" ? "Instrument-pris" : "Entry price"}
+                      value={entryPrice} onChange={(e) => setEntryPrice(e.target.value)}
+                      className="w-32 bg-[var(--surface)] border border-[var(--border2)] rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-['DM_Mono',monospace] text-[var(--ink)] focus:border-[var(--green2)] outline-none"
+                      step="0.01" autoFocus />
+                    <input type="number" placeholder="Antal" value={quantity} onChange={(e) => setQuantity(e.target.value)}
+                      className="w-24 bg-[var(--surface)] border border-[var(--border2)] rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-['DM_Mono',monospace] text-[var(--ink)] outline-none" />
+                    <button onClick={() => handleTakeSignal(signal)}
+                      className="bg-[var(--green)] text-white font-['DM_Mono',monospace] text-[11px] px-3 py-1 rounded-[var(--r-sm)] hover:bg-[var(--green2)] transition-colors cursor-pointer border-0">Bekräfta</button>
+                    <button onClick={() => { setTakingSignal(null); setEntryPrice(""); setQuantity(""); }}
+                      className="text-[var(--ink3)] font-['DM_Mono',monospace] text-[11px] px-3 py-1 rounded-[var(--r-sm)] hover:bg-[var(--cream2)] transition-colors cursor-pointer border border-[var(--border)] bg-transparent">Avbryt</button>
                   </div>
                 )}
               </div>
@@ -328,5 +293,167 @@ function SignalsContent() {
         )}
       </Card>
     </div>
+  );
+}
+
+// ─── Create Signal Form ─────────────────────────────────────────────────────
+
+function CreateSignalForm({ strategies, onCreated, onCancel }: {
+  strategies: Strategy[];
+  onCreated: () => void;
+  onCancel: () => void;
+}) {
+  const [ticker, setTicker] = useState("");
+  const [strategyId, setStrategyId] = useState(strategies[0]?.id || "");
+  const [direction, setDirection] = useState<"long" | "short">("long");
+  const [market, setMarket] = useState("US");
+  const [entryPrice, setEntryPrice] = useState("");
+  const [stopLoss, setStopLoss] = useState("");
+  const [takeProfit, setTakeProfit] = useState("");
+  const [score, setScore] = useState("");
+  const [note, setNote] = useState("");
+  const [isLeverage, setIsLeverage] = useState(false);
+  const [execSymbol, setExecSymbol] = useState("");
+  const [execPrice, setExecPrice] = useState("");
+  const [targetLeverage, setTargetLeverage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  const inputCls = "w-full bg-[var(--surface)] border border-[var(--border2)] rounded-[var(--r-sm)] px-[9px] py-[6px] text-[11.5px] font-['DM_Mono',monospace] text-[var(--ink)] outline-none focus:border-[var(--green2)]";
+  const labelCls = "block font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-[4px]";
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ticker || !strategyId || !entryPrice) { setFormError("Ticker, strategi och entry krävs"); return; }
+    setSubmitting(true); setFormError("");
+    try {
+      await signalsApi.create({
+        strategy_id: strategyId,
+        ticker: ticker.toUpperCase(),
+        direction,
+        entry_price: parseFloat(entryPrice),
+        stop_loss: stopLoss ? parseFloat(stopLoss) : undefined,
+        take_profit: takeProfit ? parseFloat(takeProfit) : undefined,
+        confidence: score ? parseFloat(score) / 100 : undefined,
+        metadata: { market, note: note || undefined, manual: true },
+        ...(isLeverage ? {
+          execution_type: "leverage" as const,
+          execution_symbol: execSymbol || undefined,
+          instrument_price: execPrice ? parseFloat(execPrice) : undefined,
+          target_leverage: targetLeverage ? parseFloat(targetLeverage) : undefined,
+        } : {}),
+      });
+      onCreated();
+    } catch (err: any) { setFormError(err.message); }
+    finally { setSubmitting(false); }
+  }
+
+  return (
+    <Card>
+      <div className="px-[22px] py-[14px] border-b border-[var(--border)]">
+        <h2 className="font-['Fraunces'] font-semibold text-[14px] text-[var(--ink)]">Ny signal</h2>
+      </div>
+      <form onSubmit={handleSubmit} className="px-[22px] py-[16px] space-y-4">
+        {formError && (
+          <div className="bg-[var(--red2)] border border-[#dcc4c4] rounded-[var(--r-sm)] px-3 py-2">
+            <p className="text-[var(--red)] text-[10px] font-['DM_Mono',monospace]">{formError}</p>
+          </div>
+        )}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div>
+            <label className={labelCls}>Ticker *</label>
+            <input type="text" value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} placeholder="AAPL" className={inputCls} required />
+          </div>
+          <div>
+            <label className={labelCls}>Strategi *</label>
+            <select value={strategyId} onChange={(e) => setStrategyId(e.target.value)} className={inputCls} required>
+              <option value="">Välj...</option>
+              {strategies.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Riktning</label>
+            <div className="flex gap-1">
+              <button type="button" onClick={() => setDirection("long")}
+                className={`flex-1 py-[6px] rounded-[var(--r-sm)] text-[11px] font-['DM_Mono',monospace] font-medium border-0 cursor-pointer transition-colors ${direction === "long" ? "bg-[var(--green)] text-white" : "bg-[var(--cream2)] text-[var(--ink3)]"}`}>LONG</button>
+              <button type="button" onClick={() => setDirection("short")}
+                className={`flex-1 py-[6px] rounded-[var(--r-sm)] text-[11px] font-['DM_Mono',monospace] font-medium border-0 cursor-pointer transition-colors ${direction === "short" ? "bg-[var(--red)] text-white" : "bg-[var(--cream2)] text-[var(--ink3)]"}`}>SHORT</button>
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>Marknad</label>
+            <select value={market} onChange={(e) => setMarket(e.target.value)} className={inputCls}>
+              <option value="US">US</option>
+              <option value="SE">SE</option>
+            </select>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div>
+            <label className={labelCls}>Entry *</label>
+            <input type="number" value={entryPrice} onChange={(e) => setEntryPrice(e.target.value)} placeholder="150.00" step="0.01" className={inputCls} required />
+          </div>
+          <div>
+            <label className={labelCls}>Stop Loss</label>
+            <input type="number" value={stopLoss} onChange={(e) => setStopLoss(e.target.value)} placeholder="145.00" step="0.01" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Take Profit</label>
+            <input type="number" value={takeProfit} onChange={(e) => setTakeProfit(e.target.value)} placeholder="160.00" step="0.01" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Score (0-100)</label>
+            <input type="number" value={score} onChange={(e) => setScore(e.target.value)} placeholder="75" min="0" max="100" className={inputCls} />
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Anteckning (valfritt)</label>
+          <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Fritext..." className={inputCls} />
+        </div>
+
+        {/* Leverage toggle */}
+        <div className="flex items-center gap-2">
+          <input type="checkbox" id="isLev" checked={isLeverage} onChange={(e) => setIsLeverage(e.target.checked)} className="cursor-pointer" />
+          <label htmlFor="isLev" className="font-['DM_Mono',monospace] text-[10px] text-[var(--ink3)] cursor-pointer">Hävstångsprodukt</label>
+        </div>
+        {isLeverage && (
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 bg-[var(--purple2)] p-3 rounded-[var(--r-sm)]">
+            <div>
+              <label className={labelCls}>Instrument (symbol)</label>
+              <input type="text" value={execSymbol} onChange={(e) => setExecSymbol(e.target.value)} placeholder="BULL AAPL X3 AVA" className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Instrument-pris</label>
+              <input type="number" value={execPrice} onChange={(e) => setExecPrice(e.target.value)} placeholder="25.50" step="0.01" className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Hävstång (x)</label>
+              <input type="number" value={targetLeverage} onChange={(e) => setTargetLeverage(e.target.value)} placeholder="3" className={inputCls} />
+            </div>
+          </div>
+        )}
+
+        {/* R:R preview */}
+        {entryPrice && stopLoss && (
+          <div className="flex gap-4 font-['DM_Mono',monospace] text-[10px]">
+            <span className="text-[var(--red)]">Risk: {Math.abs(((parseFloat(entryPrice) - parseFloat(stopLoss)) / parseFloat(entryPrice)) * 100).toFixed(1)}%</span>
+            {takeProfit && (
+              <span className="text-[var(--green)]">R:R 1:{(Math.abs(parseFloat(takeProfit) - parseFloat(entryPrice)) / Math.abs(parseFloat(entryPrice) - parseFloat(stopLoss))).toFixed(1)}</span>
+            )}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button type="submit" disabled={submitting}
+            className="bg-[var(--green)] text-white font-['DM_Mono',monospace] text-[11px] font-medium px-4 py-[7px] rounded-[var(--r-sm)] hover:bg-[var(--green2)] transition-colors border-0 cursor-pointer disabled:opacity-50">
+            {submitting ? "Sparar..." : "Skapa signal"}
+          </button>
+          <button type="button" onClick={onCancel}
+            className="text-[var(--ink3)] font-['DM_Mono',monospace] text-[11px] px-4 py-[7px] rounded-[var(--r-sm)] hover:bg-[var(--cream2)] transition-colors cursor-pointer border border-[var(--border)] bg-transparent">
+            Avbryt
+          </button>
+        </div>
+      </form>
+    </Card>
   );
 }

@@ -166,10 +166,10 @@ function PositionsContent() {
                     className="w-28 bg-[var(--surface)] border border-[var(--border2)] rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-['DM_Mono',monospace] text-[var(--ink)] outline-none" />
                   <input type="number" placeholder="Antal" value={partialQuantity} onChange={e => setPartialQuantity(e.target.value)}
                     className="w-24 bg-[var(--surface)] border border-[var(--border2)] rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-['DM_Mono',monospace] text-[var(--ink)] outline-none" />
-                  {pos.remaining_quantity && (
+                  {(pos.remaining_quantity || pos.quantity) && (
                     <div className="flex gap-1">
                       {[25,50,75].map(pct => (
-                        <button key={pct} onClick={() => setPartialQuantity(Math.floor((pos.remaining_quantity! * pct) / 100).toString())}
+                        <button key={pct} onClick={() => setPartialQuantity(Math.floor(((pos.remaining_quantity ?? pos.quantity ?? 0) * pct) / 100).toString())}
                           className="text-[10px] font-['DM_Mono',monospace] text-[#1A5C6A] border border-[#B0D4D4] px-1.5 py-0.5 rounded-[3px] hover:bg-[#D0E8E4] cursor-pointer bg-transparent">{pct}%</button>
                       ))}
                     </div>

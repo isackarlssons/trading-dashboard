@@ -111,7 +111,7 @@ function TradesContent() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-[var(--border)]">
-                  {["Ticker","Dir","Entry","Exit","P&L %","P&L","Resultat","Stängd",""].map(h => (
+                  {["Ticker","Dir","Entry","Exit","P&L %","P&L","Resultat","Öppnad","Stängd",""].map(h => (
                     <th key={h} className="text-left py-[10px] px-[12px] font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] font-medium first:pl-[22px] last:pr-[22px]">{h}</th>
                   ))}
                 </tr>
@@ -130,6 +130,7 @@ function TradesContent() {
                       {trade.pnl != null ? `${trade.pnl > 0 ? "+" : ""}${trade.pnl.toFixed(2)}` : "-"}
                     </td>
                     <td className="py-[12px] px-[12px]"><Badge variant={trade.result}>{trade.result.toUpperCase()}</Badge></td>
+                    <td className="py-[12px] px-[12px] font-['DM_Mono',monospace] text-[10px] text-[var(--ink4)]">{new Date(trade.opened_at).toLocaleDateString("sv-SE")}</td>
                     <td className="py-[12px] px-[12px] font-['DM_Mono',monospace] text-[10px] text-[var(--ink4)]">{new Date(trade.closed_at).toLocaleDateString("sv-SE")}</td>
                     <td className="py-[12px] px-[12px] pr-[22px]">
                       {deletingId === trade.id ? (

@@ -64,15 +64,15 @@ export function PositionCard({
           <PriceInfo label="Entry" value={position.entry_price} />
           <PriceInfo label="SL" value={position.stop_loss} color="var(--red)" />
           <PriceInfo label="TP" value={position.take_profit} color="var(--green)" />
-          {position.remaining_quantity != null && (
+          {(position.remaining_quantity != null || position.quantity != null) && (
             <div className="text-right">
               <div className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] tracking-[0.9px] uppercase mb-[2px]">
                 Qty
               </div>
               <div className="font-['DM_Mono',monospace] font-medium text-[13px] text-[var(--ink)]">
-                {position.remaining_quantity}
-                {position.original_quantity && (
-                  <span className="text-[var(--ink4)]">/{position.original_quantity}</span>
+                {position.remaining_quantity ?? position.quantity}
+                {(position.original_quantity || position.quantity) && (
+                  <span className="text-[var(--ink4)]">/{position.original_quantity ?? position.quantity}</span>
                 )}
               </div>
             </div>
@@ -133,7 +133,7 @@ export function PositionCard({
       {/* Footer with actions */}
       {position.status === "open" && (
         <div className="flex items-center justify-end gap-[6px] px-[22px] py-[10px] border-t border-[var(--border)]">
-          {position.remaining_quantity && position.remaining_quantity > 0 && (
+          {(position.remaining_quantity || position.quantity) && (position.remaining_quantity ?? position.quantity ?? 0) > 0 && (
             <button
               onClick={() => onPartialClose(position.id)}
               className="font-['DM_Mono',monospace] text-[11px] text-[#1A5C6A] border border-[#B0D4D4] px-[11px] py-[5px] rounded-[var(--r-sm)] hover:bg-[#E0F0F0] transition-colors cursor-pointer bg-transparent"
