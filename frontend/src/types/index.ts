@@ -2,7 +2,7 @@
 
 export type SignalDirection = "long" | "short";
 export type SignalStatus = "pending" | "taken" | "skipped" | "expired";
-export type PositionStatus = "open" | "closed";
+export type PositionStatus = "open" | "reduced" | "closed";
 export type TradeResult = "win" | "loss" | "breakeven";
 export type ExecutionType = "stock" | "leverage";
 export type PositionActionType =
@@ -12,7 +12,7 @@ export type PositionActionType =
   | "reduce_position"
   | "close_full"
   | "hold";
-export type ActionExecutionState = "pending" | "acknowledged" | "executed";
+export type ActionExecutionState = "pending" | "acknowledged" | "executed" | "dismissed";
 
 export interface Strategy {
   id: string;
@@ -30,6 +30,8 @@ export interface Signal {
   strategy_id: string;
   ticker: string;
   direction: SignalDirection;
+  market: string | null;
+  underlying_ticker: string | null;
   entry_price: number | null;
   stop_loss: number | null;
   take_profit: number | null;
@@ -37,8 +39,10 @@ export interface Signal {
   status: SignalStatus;
   metadata: Record<string, unknown> | null;
   signal_time: string;
-  expires_at: string | null;
   created_at: string;
+  taken_at: string | null;
+  skipped_at: string | null;
+  expires_at: string | null;
   strategy?: Strategy;
   strategies?: Strategy;
   // Leverage execution fields
@@ -57,6 +61,13 @@ export interface PositionAction {
   id: string;
   position_id: string;
   action_type: PositionActionType;
+  // New specific fields
+  old_stop_loss: number | null;
+  new_stop_loss: number | null;
+  sell_percent: number | null;
+  sell_quantity: number | null;
+  reason: string | null;
+  // Legacy fields (kept for backward compat)
   target_value: number | null;
   description: string | null;
   execution_state: ActionExecutionState;
@@ -68,6 +79,13 @@ export interface PositionAction {
 export interface PartialExit {
   id: string;
   position_id: string;
+  action_id: string | null;
+  // New canonical field names
+  price: number | null;
+  quantity_sold: number | null;
+  percent_sold: number | null;
+  executed_at: string | null;
+  // Legacy field names (still populated by backend)
   exit_price: number;
   quantity: number;
   pnl: number | null;
@@ -83,13 +101,25 @@ export interface Position {
   signal_id: string | null;
   ticker: string;
   direction: SignalDirection;
+  market: string | null;
+  status: PositionStatus;
+  // New canonical fields
+  planned_entry_price: number | null;
+  actual_entry_price: number | null;
+  current_stop_loss: number | null;
+  avg_entry_price: number | null;
+  // Legacy fields (still present for backward compat)
   entry_price: number;
   stop_loss: number | null;
   take_profit: number | null;
   quantity: number | null;
   original_quantity: number | null;
   remaining_quantity: number | null;
-  status: PositionStatus;
+  // Execution fields
+  execution_type: ExecutionType | null;
+  execution_symbol: string | null;
+  execution_isin: string | null;
+  instrument_price: number | null;
   notes: string | null;
   opened_at: string;
   closed_at: string | null;
@@ -136,6 +166,15 @@ export interface TradeStats {
 
 // ─── Request types ──────────────────────────────────────────────────────────
 
+export interface TakeSignal {
+  actual_entry_price?: number;
+  quantity?: number;
+  stop_loss?: number;
+  take_profit?: number;
+  instrument_price?: number;
+  notes?: string;
+}
+
 export interface CreatePositionFromSignal {
   signal_id: string;
   entry_price: number;
@@ -156,12 +195,15 @@ export interface PartialClosePosition {
   quantity: number;
   fees?: number;
   notes?: string;
+  action_id?: string;
 }
 
 export interface CreateSignal {
   strategy_id: string;
   ticker: string;
   direction: SignalDirection;
+  market?: string;
+  underlying_ticker?: string;
   entry_price?: number;
   stop_loss?: number;
   take_profit?: number;
@@ -189,14 +231,22 @@ export interface UpdateSignal {
 
 export interface UpdatePosition {
   stop_loss?: number;
+  current_stop_loss?: number;
   take_profit?: number;
   notes?: string;
   remaining_quantity?: number;
+  avg_entry_price?: number;
 }
 
 export interface CreatePositionAction {
   position_id: string;
   action_type: PositionActionType;
+  old_stop_loss?: number;
+  new_stop_loss?: number;
+  sell_percent?: number;
+  sell_quantity?: number;
+  reason?: string;
+  // Legacy fields
   target_value?: number;
   description?: string;
   created_by?: string;

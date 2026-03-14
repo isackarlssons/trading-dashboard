@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback } from "react";
 import { positionsApi, positionActionsApi } from "@/lib/api";
 import { PositionCard } from "@/components/positions/PositionCard";
 import { Card } from "@/components/ui/Card";
-import type { Position, ClosePosition, PartialClosePosition } from "@/types";
+import type { Position } from "@/types";
 
 type TabFilter = "all" | "open" | "closed";
 
@@ -145,7 +145,7 @@ function PositionsContent() {
           {filtered.map(pos => (
             <div key={pos.id}>
               <PositionCard position={pos} onClose={handleClose} onPartialClose={handlePartialClose}
-                onUpdateStop={handleUpdateStop} onAcknowledgeAction={handleAck} onExecuteAction={handleExec} />
+                onAcknowledgeAction={handleAck} onExecuteAction={handleExec} />
 
               {closingId === pos.id && (
                 <div className="bg-[var(--red2)] border border-[var(--border)] rounded-b-[var(--r)] px-[22px] py-[10px] -mt-2 flex items-center gap-[8px] flex-wrap">

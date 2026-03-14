@@ -2,13 +2,12 @@
 
 import AppShell from "@/components/layout/AppShell";
 import { useEffect, useState, useCallback } from "react";
-import { signalsApi, positionsApi, strategiesApi } from "@/lib/api";
+import { signalsApi, strategiesApi } from "@/lib/api";
 import { SignalRow } from "@/components/signals/SignalRow";
 import { Card } from "@/components/ui/Card";
-import { Badge } from "@/components/ui/Badge";
-import type { Signal, Strategy, CreatePositionFromSignal } from "@/types";
+import type { Signal, Strategy, TakeSignal } from "@/types";
 
-type TabFilter = "active" | "skipped" | "expired" | "all";
+type TabFilter = "pending" | "taken" | "skipped" | "expired";
 
 export default function SignalsPage() {
   return (
@@ -20,7 +19,7 @@ export default function SignalsPage() {
 
 function SignalsContent() {
   const [signals, setSignals] = useState<Signal[]>([]);
-  const [tab, setTab] = useState<TabFilter>("active");
+  const [tab, setTab] = useState<TabFilter>("pending");
   const [tickerSearch, setTickerSearch] = useState("");
   const [strategyFilter, setStrategyFilter] = useState("");
   const [marketFilter, setMarketFilter] = useState("");
@@ -60,12 +59,7 @@ function SignalsContent() {
 
   // ─── Filter by tab ────────────────────────────────────────────────────────
   const filteredSignals = signals
-    .filter((s) => {
-      if (tab === "active") return s.status === "pending" || s.status === "taken";
-      if (tab === "skipped") return s.status === "skipped";
-      if (tab === "expired") return s.status === "expired";
-      return true;
-    })
+    .filter((s) => s.status === tab)
     .filter((s) => (tickerSearch ? s.ticker.toLowerCase().includes(tickerSearch.toLowerCase()) : true))
     .filter((s) => {
       if (!strategyFilter) return true;
@@ -73,15 +67,16 @@ function SignalsContent() {
     })
     .filter((s) => {
       if (!marketFilter) return true;
-      const m = typeof s.metadata === "object" && s.metadata !== null && "market" in s.metadata ? String(s.metadata.market).toLowerCase() : "";
-      return m === marketFilter.toLowerCase();
+      // Prefer the dedicated market column; fall back to metadata for old rows
+      const m = s.market || (typeof s.metadata === "object" && s.metadata !== null && "market" in s.metadata ? String(s.metadata.market) : "");
+      return m.toLowerCase() === marketFilter.toLowerCase();
     });
 
   const counts = {
-    active: signals.filter((s) => s.status === "pending" || s.status === "taken").length,
+    pending: signals.filter((s) => s.status === "pending").length,
+    taken: signals.filter((s) => s.status === "taken").length,
     skipped: signals.filter((s) => s.status === "skipped").length,
     expired: signals.filter((s) => s.status === "expired").length,
-    all: signals.length,
   };
 
   // ─── Optimistic Take Trade ────────────────────────────────────────────────
@@ -89,18 +84,15 @@ function SignalsContent() {
     if (takingSignal?.id === signal.id) {
       if (!entryPrice) return;
       try {
-        const data: CreatePositionFromSignal = {
-          signal_id: signal.id,
-          entry_price: parseFloat(entryPrice),
+        const data: TakeSignal = {
+          actual_entry_price: parseFloat(entryPrice),
           quantity: quantity ? parseFloat(quantity) : undefined,
-          stop_loss: signal.stop_loss || undefined,
-          take_profit: signal.take_profit || undefined,
         };
         setSignals((prev) => prev.map((s) => (s.id === signal.id ? { ...s, status: "taken" as const } : s)));
         setTakingSignal(null);
         setEntryPrice("");
         setQuantity("");
-        await positionsApi.fromSignal(data);
+        await signalsApi.take(signal.id, data);
       } catch (err: any) {
         setSignals((prev) => prev.map((s) => (s.id === signal.id ? { ...s, status: "pending" as const } : s)));
         setError(err.message);
@@ -171,10 +163,10 @@ function SignalsContent() {
 
   // ─── Tabs config ──────────────────────────────────────────────────────────
   const tabs: { key: TabFilter; label: string; count: number }[] = [
-    { key: "active", label: "Aktiva", count: counts.active },
+    { key: "pending", label: "Pending", count: counts.pending },
+    { key: "taken", label: "Tagna", count: counts.taken },
     { key: "skipped", label: "Skippade", count: counts.skipped },
     { key: "expired", label: "Utgångna", count: counts.expired },
-    { key: "all", label: "Alla", count: counts.all },
   ];
 
   return (

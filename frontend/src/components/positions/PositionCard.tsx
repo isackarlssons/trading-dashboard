@@ -14,7 +14,6 @@ interface PositionCardProps {
   position: Position;
   onClose: (positionId: string) => void;
   onPartialClose: (positionId: string) => void;
-  onUpdateStop: (positionId: string, newStop: number) => void;
   onAcknowledgeAction: (actionId: string) => void;
   onExecuteAction: (actionId: string) => void;
 }
@@ -23,7 +22,6 @@ export function PositionCard({
   position,
   onClose,
   onPartialClose,
-  onUpdateStop,
   onAcknowledgeAction,
   onExecuteAction,
 }: PositionCardProps) {
@@ -61,8 +59,11 @@ export function PositionCard({
         </div>
 
         <div className="flex items-center gap-[18px]">
-          <PriceInfo label="Entry" value={position.entry_price} />
-          <PriceInfo label="SL" value={position.stop_loss} color="var(--red)" />
+          <PriceInfo label="Entry" value={position.actual_entry_price ?? position.entry_price} />
+          {position.avg_entry_price != null && position.avg_entry_price !== (position.actual_entry_price ?? position.entry_price) && (
+            <PriceInfo label="Avg Entry" value={position.avg_entry_price} />
+          )}
+          <PriceInfo label="SL" value={position.current_stop_loss ?? position.stop_loss} color="var(--red)" />
           <PriceInfo label="TP" value={position.take_profit} color="var(--green)" />
           {(position.remaining_quantity != null || position.quantity != null) && (
             <div className="text-right">
@@ -131,7 +132,7 @@ export function PositionCard({
       )}
 
       {/* Footer with actions */}
-      {position.status === "open" && (
+      {(position.status === "open" || position.status === "reduced") && (
         <div className="flex items-center justify-end gap-[6px] px-[22px] py-[10px] border-t border-[var(--border)]">
           {(position.remaining_quantity || position.quantity) && (position.remaining_quantity ?? position.quantity ?? 0) > 0 && (
             <button
@@ -191,12 +192,27 @@ function ActionRow({
   return (
     <div className="flex items-center gap-[8px] flex-wrap">
       <Badge variant={action.action_type}>{label}</Badge>
-      {action.target_value != null && (
+      {action.new_stop_loss != null && (
+        <span className="font-['DM_Mono',monospace] text-[11px] text-[var(--ink)]">
+          {action.old_stop_loss != null ? `${action.old_stop_loss.toFixed(2)} → ` : "→ "}
+          {action.new_stop_loss.toFixed(2)}
+        </span>
+      )}
+      {action.sell_percent != null && (
+        <span className="font-['DM_Mono',monospace] text-[11px] text-[var(--ink)]">
+          {action.sell_percent.toFixed(0)}%
+          {action.sell_quantity != null && ` (${action.sell_quantity} st)`}
+        </span>
+      )}
+      {action.reason && (
+        <span className="text-[11px] text-[var(--ink3)]">{action.reason}</span>
+      )}
+      {!action.new_stop_loss && !action.sell_percent && action.target_value != null && (
         <span className="font-['DM_Mono',monospace] text-[11px] text-[var(--ink)]">
           → {action.target_value.toFixed(2)}
         </span>
       )}
-      {action.description && (
+      {!action.reason && action.description && (
         <span className="text-[11px] text-[var(--ink3)]">{action.description}</span>
       )}
       <div className="ml-auto flex items-center gap-[4px]">

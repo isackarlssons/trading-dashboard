@@ -7,6 +7,7 @@ import type {
   Strategy,
   CreateSignal,
   UpdateSignal,
+  TakeSignal,
   CreatePositionFromSignal,
   ClosePosition,
   PartialClosePosition,
@@ -85,6 +86,13 @@ export const signalsApi = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+
+  /** Canonical take-trade endpoint: marks signal taken, creates position. */
+  take: (signalId: string, data: TakeSignal) =>
+    apiFetch<Position>(`/signals/${signalId}/take`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };
 
 // ─── Positions ──────────────────────────────────────────────────────────────
@@ -98,10 +106,12 @@ export const positionsApi = {
     return apiFetch<Position[]>(`/positions/${qs ? `?${qs}` : ""}`);
   },
 
+  /** Returns all open AND reduced positions with their pending actions. */
   open: () => apiFetch<Position[]>("/positions/open"),
 
   get: (id: string) => apiFetch<Position>(`/positions/${id}`),
 
+  /** Backward-compatible take via positions router. Prefer signalsApi.take. */
   fromSignal: (data: CreatePositionFromSignal) =>
     apiFetch<Position>("/positions/from-signal", {
       method: "POST",

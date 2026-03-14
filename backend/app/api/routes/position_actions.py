@@ -49,21 +49,56 @@ async def create_action(
     data: dict,
     user: dict = Depends(get_current_user),
 ):
-    """Create a new position management action (typically from bot)."""
+    """Create a new position management action (typically sent by the bot).
+
+    Duplicate prevention: if there is already a pending action of the same
+    action_type for this position, the existing action is returned instead of
+    creating a new one.
+
+    Payload:
+        position_id: str        (UUID)
+        action_type: str        (raise_stop | move_stop_to_breakeven | take_partial
+                                 | reduce_position | close_full | hold)
+        old_stop_loss: float    (optional)
+        new_stop_loss: float    (optional)
+        sell_percent: float     (optional, 0-100)
+        sell_quantity: float    (optional)
+        reason: str             (optional)
+        target_value: float     (optional, legacy)
+        description: str        (optional, legacy)
+    """
     sb = get_supabase()
 
-    # Verify position exists and is open
+    position_id = data.get("position_id")
+    action_type = data.get("action_type")
+
+    if not position_id or not action_type:
+        raise HTTPException(status_code=400, detail="position_id and action_type are required")
+
+    # Verify position exists and is open/reduced
     pos_result = (
         sb.table("positions")
         .select("id, status")
-        .eq("id", data["position_id"])
+        .eq("id", position_id)
         .single()
         .execute()
     )
     if not pos_result.data:
         raise HTTPException(status_code=404, detail="Position not found")
-    if pos_result.data["status"] != "open":
-        raise HTTPException(status_code=400, detail="Position is not open")
+    if pos_result.data["status"] not in ("open", "reduced"):
+        raise HTTPException(status_code=400, detail="Position is not open or reduced")
+
+    # Duplicate check: return existing pending action of same type
+    existing = (
+        sb.table("position_actions")
+        .select("*")
+        .eq("position_id", position_id)
+        .eq("action_type", action_type)
+        .eq("execution_state", "pending")
+        .execute()
+    )
+    if existing.data:
+        return existing.data[0]
 
     result = sb.table("position_actions").insert(data).execute()
     return result.data[0] if result.data else {}
@@ -75,7 +110,7 @@ async def update_action(
     data: dict,
     user: dict = Depends(get_current_user),
 ):
-    """Update action execution state (e.g., mark as acknowledged or executed)."""
+    """Update action execution state (acknowledged / executed / dismissed)."""
     sb = get_supabase()
 
     update_data = {}
@@ -105,10 +140,5 @@ async def delete_action(
 ):
     """Delete a position action."""
     sb = get_supabase()
-    result = (
-        sb.table("position_actions")
-        .delete()
-        .eq("id", action_id)
-        .execute()
-    )
+    sb.table("position_actions").delete().eq("id", action_id).execute()
     return {"deleted": True}
