@@ -2,8 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
 from datetime import datetime
 
+import logging
+
 from app.core.supabase import get_supabase
 from app.core.auth import get_current_user
+from app.services.market_data import get_price
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/positions", tags=["positions"])
 
@@ -65,21 +70,17 @@ async def risk_summary(
         .execute()
     ).data or []
 
-    # Best-effort live price fetch — graceful fallback to null
+    # Live price fetch via shared helper — graceful fallback to null
     prices: dict = {}
     unique_tickers = list({p["ticker"] for p in positions})
-    if unique_tickers:
-        try:
-            import yfinance as yf
-            for ticker in unique_tickers:
-                try:
-                    info = yf.Ticker(ticker).fast_info
-                    price = info.get("lastPrice") or info.get("regularMarketPreviousClose")
-                    prices[ticker] = float(price) if price else None
-                except Exception:
-                    prices[ticker] = None
-        except ImportError:
-            prices = {t: None for t in unique_tickers}
+    for ticker in unique_tickers:
+        result = get_price(ticker)
+        prices[ticker] = result.current_price
+        log.info(
+            "[risk-summary] %s: price=%r  fallback=%s  unavailable=%s  error=%s",
+            ticker, result.current_price, result.fallback_used,
+            result.price_unavailable, result.error,
+        )
 
     per_position = []
     total_risk = 0.0

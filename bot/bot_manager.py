@@ -23,6 +23,13 @@ import sys
 import logging
 import requests
 
+# Allow importing the shared backend service from the sibling directory
+_BACKEND_DIR = os.path.join(os.path.dirname(__file__), "..", "backend")
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
+from app.services.market_data import get_price  # noqa: E402
+
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger("bot")
 
@@ -61,50 +68,14 @@ def api_post(path: str, body: dict) -> dict:
 # ─── Market data ─────────────────────────────────────────────────────────────
 
 def get_current_price(ticker: str, market: str | None = None, symbol_override: str | None = None) -> float | None:
-    """Fetch the latest price for a ticker.
-
-    Args:
-        ticker:          Position ticker from DB (e.g. "SLB")
-        market:          Market field from position (e.g. "US", "SE") — informational
-        symbol_override: Use this symbol instead of ticker (e.g. execution_symbol)
+    """Fetch the latest price via the shared market_data helper.
 
     Returns float price or None if unavailable.
     """
-    lookup_symbol = symbol_override or ticker
-    source = "yfinance/fast_info"
-
-    log.debug(
-        f"  [price] ticker={ticker!r}  market={market!r}  "
-        f"symbol={lookup_symbol!r}  source={source}"
-    )
-
-    try:
-        import yfinance as yf
-        info = yf.Ticker(lookup_symbol).fast_info
-
-        # ── Debug: show all available keys and their values ──────────────────
-        try:
-            available = {k: info[k] for k in info.keys()}
-            log.debug(f"  [price] fast_info keys for {lookup_symbol!r}: {available}")
-        except Exception:
-            log.debug(f"  [price] fast_info not iterable for {lookup_symbol!r} — type: {type(info)}")
-
-        # NOTE: fast_info uses camelCase keys, NOT snake_case.
-        # Wrong:  "last_price", "regularMarketPrice"
-        # Correct: "lastPrice"
-        price = info.get("lastPrice") or info.get("regularMarketPreviousClose")
-
-        log.debug(f"  [price] raw lastPrice={info.get('lastPrice')!r}  regularMarketPreviousClose={info.get('regularMarketPreviousClose')!r}  → selected={price!r}")
-
-        if price:
-            return float(price)
-
-        log.warning(f"  [price] {lookup_symbol!r}: all price keys returned None/0 — position will be skipped")
-        return None
-
-    except Exception as e:
-        log.warning(f"  [price] {lookup_symbol!r}: exception from yfinance: {type(e).__name__}: {e}")
-        return None
+    result = get_price(ticker, market=market, symbol_override=symbol_override)
+    if result.price_unavailable:
+        log.warning(f"  [{ticker}] No price available — {result.error}")
+    return result.current_price
 
 
 # ─── Management logic ─────────────────────────────────────────────────────────
