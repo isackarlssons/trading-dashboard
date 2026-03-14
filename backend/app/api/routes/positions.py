@@ -6,9 +6,11 @@ import logging
 
 from app.core.supabase import get_supabase
 from app.core.auth import get_current_user
-from app.services.market_data import get_price
 
 log = logging.getLogger(__name__)
+
+# Snapshots older than this are treated as price_unavailable
+_SNAPSHOT_STALE_HOURS = 4
 
 router = APIRouter(prefix="/positions", tags=["positions"])
 
@@ -70,17 +72,40 @@ async def risk_summary(
         .execute()
     ).data or []
 
-    # Live price fetch via shared helper — graceful fallback to null
+    # Read latest price from market_snapshots (written by bot) — no Yahoo calls here
     prices: dict = {}
     unique_tickers = list({p["ticker"] for p in positions})
+    now_utc = datetime.utcnow()
+
     for ticker in unique_tickers:
-        result = get_price(ticker)
-        prices[ticker] = result.current_price
-        log.info(
-            "[risk-summary] %s: price=%r  fallback=%s  unavailable=%s  error=%s",
-            ticker, result.current_price, result.fallback_used,
-            result.price_unavailable, result.error,
+        snap_result = (
+            sb.table("market_snapshots")
+            .select("price, snapshot_time")
+            .eq("ticker", ticker)
+            .order("snapshot_time", desc=True)
+            .limit(1)
+            .execute()
         )
+        if snap_result.data:
+            snap = snap_result.data[0]
+            raw_time = snap["snapshot_time"]
+            # Parse ISO timestamp (strip timezone offset for naive comparison)
+            try:
+                snap_dt = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+                snap_dt_naive = snap_dt.replace(tzinfo=None)
+                age_hours = (now_utc - snap_dt_naive).total_seconds() / 3600
+            except Exception:
+                age_hours = 999  # unparseable → treat as stale
+
+            if age_hours <= _SNAPSHOT_STALE_HOURS:
+                prices[ticker] = float(snap["price"])
+                log.info("[risk-summary] %s: snapshot price=%r  age=%.2fh", ticker, prices[ticker], age_hours)
+            else:
+                prices[ticker] = None
+                log.info("[risk-summary] %s: snapshot stale (%.2fh old) — unavailable", ticker, age_hours)
+        else:
+            prices[ticker] = None
+            log.info("[risk-summary] %s: no snapshot in market_snapshots — unavailable", ticker)
 
     per_position = []
     total_risk = 0.0

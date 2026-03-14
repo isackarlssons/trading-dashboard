@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api.routes import signals, positions, trades, strategies, position_actions
+from app.api.routes import signals, positions, trades, strategies, position_actions, market_snapshots
 
 app = FastAPI(
     title="Trading Dashboard API",
@@ -37,6 +37,7 @@ app.include_router(signals.router, prefix="/api/v1")
 app.include_router(positions.router, prefix="/api/v1")
 app.include_router(trades.router, prefix="/api/v1")
 app.include_router(position_actions.router, prefix="/api/v1")
+app.include_router(market_snapshots.router, prefix="/api/v1")
 
 
 @app.get("/")

@@ -204,6 +204,16 @@ def run() -> None:
             log.warning(f"  [{ticker}] No price available, skipping")
             continue
 
+        # Write price snapshot so the dashboard risk-summary can read it
+        # without calling Yahoo directly (avoids Railway rate-limit errors)
+        try:
+            api_post("/market-snapshots/", {"ticker": ticker, "price": price})
+            log.debug(f"  [{ticker}] Wrote market snapshot: price={price}")
+        except requests.HTTPError as e:
+            log.warning(f"  [{ticker}] Failed to write market snapshot: {e.response.text}")
+        except Exception as e:
+            log.warning(f"  [{ticker}] Failed to write market snapshot: {e}")
+
         actions_to_create = evaluate_position(pos, price)
 
         for action_data in actions_to_create:
