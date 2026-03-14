@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { signalsApi, positionsApi, tradesApi, positionActionsApi } from "@/lib/api";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
-import type { Signal, Position, TradeStats, PositionAction } from "@/types";
+import type { Signal, Position, TradeStats, RiskSummary } from "@/types";
 
 export default function DashboardPage() {
   return (
@@ -19,7 +19,7 @@ function DashboardContent() {
   const [pendingSignals, setPendingSignals] = useState<Signal[]>([]);
   const [openPositions, setOpenPositions] = useState<Position[]>([]);
   const [stats, setStats] = useState<TradeStats | null>(null);
-  const [pendingActions, setPendingActions] = useState<PositionAction[]>([]);
+  const [riskSummary, setRiskSummary] = useState<RiskSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -30,16 +30,16 @@ function DashboardContent() {
   async function loadDashboard() {
     try {
       setLoading(true);
-      const [signals, positions, tradeStats, actions] = await Promise.all([
+      const [signals, positions, tradeStats, risk] = await Promise.all([
         signalsApi.pending(),
         positionsApi.open(),
         tradesApi.stats(),
-        positionActionsApi.listPending().catch(() => []),
+        positionsApi.riskSummary().catch(() => null),
       ]);
       setPendingSignals(signals);
       setOpenPositions(positions);
       setStats(tradeStats);
-      setPendingActions(actions);
+      setRiskSummary(risk);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -169,6 +169,92 @@ function DashboardContent() {
                 </p>
               </div>
             </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Risk Monitor */}
+      {riskSummary && (riskSummary.open_positions_count + riskSummary.reduced_positions_count) > 0 && (
+        <Card>
+          <div className="px-[22px] py-[16px]">
+            <h2 className="font-['Fraunces'] font-semibold text-[14px] text-[var(--ink)] mb-4">
+              Risk Monitor
+            </h2>
+
+            {/* Summary row */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-5">
+              <div>
+                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">Total riskexponering</p>
+                <p className="font-['Fraunces'] text-[22px] font-bold" style={{ color: "var(--red)" }}>
+                  {riskSummary.total_open_risk > 0 ? `-${riskSummary.total_open_risk.toFixed(2)}` : "0.00"}
+                </p>
+              </div>
+              <div>
+                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">Orealiserad P&L</p>
+                <p className="font-['Fraunces'] text-[22px] font-bold" style={{ color: riskSummary.total_unrealized_pnl >= 0 ? "var(--green)" : "var(--red)" }}>
+                  {riskSummary.total_unrealized_pnl >= 0 ? "+" : ""}{riskSummary.total_unrealized_pnl.toFixed(2)}
+                  {riskSummary.per_position.some(p => p.price_unavailable) && (
+                    <span className="font-['DM_Mono',monospace] text-[9px] text-[var(--ink4)] ml-1">*</span>
+                  )}
+                </p>
+              </div>
+              <div>
+                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">Öppna / Reducerade</p>
+                <p className="font-['Fraunces'] text-[22px] font-bold text-[var(--ink)]">
+                  {riskSummary.open_positions_count}
+                  <span className="text-[var(--ink4)]"> / </span>
+                  {riskSummary.reduced_positions_count}
+                </p>
+              </div>
+              <div>
+                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">Max nedsida (stops)</p>
+                <p className="font-['Fraunces'] text-[22px] font-bold" style={{ color: "var(--red)" }}>
+                  {riskSummary.max_downside_to_stops > 0 ? `-${riskSummary.max_downside_to_stops.toFixed(2)}` : "0.00"}
+                </p>
+              </div>
+            </div>
+
+            {/* Per-position table */}
+            <div className="border border-[var(--border)] rounded-[var(--r-sm)] overflow-hidden">
+              <div className="grid grid-cols-[1fr_60px_70px_80px_80px_80px] font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[0.9px] px-3 py-[6px] bg-[var(--cream)] border-b border-[var(--border)]">
+                <span>Ticker</span>
+                <span>Dir</span>
+                <span>Entry</span>
+                <span>SL</span>
+                <span className="text-right">Risk</span>
+                <span className="text-right">P&L</span>
+              </div>
+              {riskSummary.per_position.map((p) => (
+                <div key={p.position_id} className="grid grid-cols-[1fr_60px_70px_80px_80px_80px] items-center px-3 py-[8px] border-b border-[var(--border)] last:border-0 hover:bg-[var(--cream)] transition-colors">
+                  <div className="flex items-center gap-[6px]">
+                    <span className="font-['Fraunces'] font-bold text-[13px] text-[var(--ink)]">{p.ticker}</span>
+                    {p.status === "reduced" && (
+                      <span className="font-['DM_Mono',monospace] text-[8px] text-[var(--amber)] border border-[var(--amber)] px-[4px] py-[1px] rounded-[2px]">RED</span>
+                    )}
+                  </div>
+                  <Badge variant={p.direction}>{p.direction.toUpperCase()}</Badge>
+                  <span className="font-['DM_Mono',monospace] text-[11px] text-[var(--ink3)]">
+                    {p.actual_entry_price?.toFixed(2) ?? "-"}
+                  </span>
+                  <span className="font-['DM_Mono',monospace] text-[11px]" style={{ color: "var(--red)" }}>
+                    {p.current_stop_loss?.toFixed(2) ?? "-"}
+                  </span>
+                  <span className="font-['DM_Mono',monospace] text-[11px] text-right" style={{ color: "var(--red)" }}>
+                    {p.risk_to_stop != null ? `-${p.risk_to_stop.toFixed(2)}` : "-"}
+                  </span>
+                  <span className="font-['DM_Mono',monospace] text-[11px] text-right" style={{
+                    color: p.price_unavailable ? "var(--ink4)" : (p.unrealized_pnl ?? 0) >= 0 ? "var(--green)" : "var(--red)"
+                  }}>
+                    {p.price_unavailable ? "N/A" : p.unrealized_pnl != null ? `${p.unrealized_pnl >= 0 ? "+" : ""}${p.unrealized_pnl.toFixed(2)}` : "-"}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {riskSummary.per_position.some(p => p.price_unavailable) && (
+              <p className="font-['DM_Mono',monospace] text-[9px] text-[var(--ink4)] mt-2">
+                * Livepris ej tillgängligt för vissa positioner — orealiserad P&L är partiell
+              </p>
+            )}
           </div>
         </Card>
       )}

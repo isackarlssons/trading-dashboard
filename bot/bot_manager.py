@@ -142,46 +142,51 @@ def evaluate_position(position: dict, price: float) -> list[dict]:
 
     log.info(f"  [{position['ticker']}] {direction.upper()} | entry={entry} | price={price:.4f} | gain={gain_pct:.2f}%")
 
-    # ── A. Move stop to breakeven ────────────────────────────────────────────
-    if (
-        gain_pct >= BREAKEVEN_AT_PCT
-        and is_profitable
-        and current_sl is not None
-        and "move_stop_to_breakeven" not in pending
-    ):
-        # Only suggest if current SL is still below breakeven (long) or above (short)
-        needs_be = (direction == "long" and current_sl < entry) or \
-                   (direction == "short" and current_sl > entry)
-        if needs_be:
-            actions.append({
-                "position_id": position["id"],
+    # ── Stop management: collect candidates, pick ONE best ───────────────────
+    # We never create two competing stop actions. The backend also enforces this,
+    # but the bot should send only the best candidate per run.
+    stop_candidates: list[dict] = []
+
+    # Candidate A: move to breakeven
+    if gain_pct >= BREAKEVEN_AT_PCT and is_profitable and current_sl is not None:
+        needs_improvement = (direction == "long" and current_sl < entry) or \
+                            (direction == "short" and current_sl > entry)
+        if needs_improvement:
+            stop_candidates.append({
+                "stop_price": entry,
                 "action_type": "move_stop_to_breakeven",
-                "new_stop_loss": entry,
                 "reason": f"Gain {gain_pct:.1f}% ≥ {BREAKEVEN_AT_PCT}% — move stop to breakeven {entry}",
             })
 
-    # ── B. Raise stop (trailing) ─────────────────────────────────────────────
-    if "raise_stop" not in pending and current_sl is not None and is_profitable:
+    # Candidate B: trailing stop
+    if is_profitable and current_sl is not None:
         if direction == "long":
             trailing_sl = round(price * (1 - TRAILING_STOP_PCT), 4)
             if trailing_sl > current_sl + 0.001:
-                actions.append({
-                    "position_id": position["id"],
+                stop_candidates.append({
+                    "stop_price": trailing_sl,
                     "action_type": "raise_stop",
-                    "old_stop_loss": current_sl,
-                    "new_stop_loss": trailing_sl,
                     "reason": f"Trailing stop: price {price:.4f} → SL {trailing_sl:.4f} ({TRAILING_STOP_PCT*100:.0f}% trail)",
                 })
-        else:  # short
+        else:
             trailing_sl = round(price * (1 + TRAILING_STOP_PCT), 4)
             if trailing_sl < current_sl - 0.001:
-                actions.append({
-                    "position_id": position["id"],
+                stop_candidates.append({
+                    "stop_price": trailing_sl,
                     "action_type": "raise_stop",
-                    "old_stop_loss": current_sl,
-                    "new_stop_loss": trailing_sl,
                     "reason": f"Trailing stop (short): price {price:.4f} → SL {trailing_sl:.4f}",
                 })
+
+    if stop_candidates:
+        # Pick most protective: highest stop for long, lowest for short
+        best = (max if direction == "long" else min)(stop_candidates, key=lambda c: c["stop_price"])
+        actions.append({
+            "position_id": position["id"],
+            "action_type": best["action_type"],
+            "old_stop_loss": current_sl,
+            "new_stop_loss": best["stop_price"],
+            "reason": best["reason"],
+        })
 
     # ── C. Take partial profit ───────────────────────────────────────────────
     if (

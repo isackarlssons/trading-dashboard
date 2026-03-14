@@ -75,10 +75,10 @@ async def create_action(
     if not position_id or not action_type:
         raise HTTPException(status_code=400, detail="position_id and action_type are required")
 
-    # Verify position exists and is open/reduced
+    # Verify position exists and is open/reduced; fetch direction for stop comparisons
     pos_result = (
         sb.table("positions")
-        .select("id, status")
+        .select("id, status, direction")
         .eq("id", position_id)
         .single()
         .execute()
@@ -88,17 +88,60 @@ async def create_action(
     if pos_result.data["status"] not in ("open", "reduced"):
         raise HTTPException(status_code=400, detail="Position is not open or reduced")
 
-    # Duplicate check: return existing pending action of same type
-    existing = (
-        sb.table("position_actions")
-        .select("*")
-        .eq("position_id", position_id)
-        .eq("action_type", action_type)
-        .eq("execution_state", "pending")
-        .execute()
-    )
-    if existing.data:
-        return existing.data[0]
+    direction = pos_result.data["direction"]
+    STOP_TYPES = {"raise_stop", "move_stop_to_breakeven"}
+
+    if action_type in STOP_TYPES:
+        new_stop = data.get("new_stop_loss")
+
+        # Fetch ALL pending stop actions for this position (both stop types)
+        existing_stops = (
+            sb.table("position_actions")
+            .select("*")
+            .eq("position_id", position_id)
+            .in_("action_type", list(STOP_TYPES))
+            .eq("execution_state", "pending")
+            .execute()
+        ).data or []
+
+        for existing in existing_stops:
+            old_stop = existing.get("new_stop_loss")
+
+            # If we can't compare numerically, return existing to avoid duplicates
+            if old_stop is None or new_stop is None:
+                return existing
+
+            if direction == "long":
+                if abs(new_stop - old_stop) < 0.001:
+                    return existing          # same target — true duplicate
+                elif new_stop > old_stop:
+                    # New is more protective — dismiss the weaker pending stop
+                    sb.table("position_actions").update(
+                        {"execution_state": "dismissed"}
+                    ).eq("id", existing["id"]).execute()
+                else:
+                    return existing          # existing is already better
+            else:  # short
+                if abs(new_stop - old_stop) < 0.001:
+                    return existing
+                elif new_stop < old_stop:
+                    sb.table("position_actions").update(
+                        {"execution_state": "dismissed"}
+                    ).eq("id", existing["id"]).execute()
+                else:
+                    return existing
+    else:
+        # Non-stop actions: simple same-type dedup
+        existing = (
+            sb.table("position_actions")
+            .select("*")
+            .eq("position_id", position_id)
+            .eq("action_type", action_type)
+            .eq("execution_state", "pending")
+            .execute()
+        )
+        if existing.data:
+            return existing.data[0]
 
     result = sb.table("position_actions").insert(data).execute()
     return result.data[0] if result.data else {}

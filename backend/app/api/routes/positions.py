@@ -46,6 +46,97 @@ async def list_open_positions(
     return result.data
 
 
+@router.get("/risk-summary")
+async def risk_summary(
+    user: dict = Depends(get_current_user),
+):
+    """Portfolio risk summary for all open/reduced positions.
+
+    Returns per-position risk-to-stop (always available from stored data) and
+    unrealized PnL (requires live price via yfinance; null if unavailable).
+    """
+    sb = get_supabase()
+
+    positions = (
+        sb.table("positions")
+        .select("*")
+        .in_("status", ["open", "reduced"])
+        .order("opened_at", desc=True)
+        .execute()
+    ).data or []
+
+    # Best-effort live price fetch — graceful fallback to null
+    prices: dict = {}
+    unique_tickers = list({p["ticker"] for p in positions})
+    if unique_tickers:
+        try:
+            import yfinance as yf
+            for ticker in unique_tickers:
+                try:
+                    info = yf.Ticker(ticker).fast_info
+                    price = info.get("lastPrice") or info.get("regularMarketPreviousClose")
+                    prices[ticker] = float(price) if price else None
+                except Exception:
+                    prices[ticker] = None
+        except ImportError:
+            prices = {t: None for t in unique_tickers}
+
+    per_position = []
+    total_risk = 0.0
+    total_unrealized_pnl = 0.0
+    open_count = 0
+    reduced_count = 0
+
+    for pos in positions:
+        if pos["status"] == "open":
+            open_count += 1
+        else:
+            reduced_count += 1
+
+        entry = pos.get("actual_entry_price") or pos.get("entry_price")
+        sl = pos.get("current_stop_loss") or pos.get("stop_loss")
+        qty = float(pos.get("remaining_quantity") or pos.get("quantity") or 0)
+        direction = pos["direction"]
+        current_price = prices.get(pos["ticker"])
+
+        # Risk to stop — always computable from stored data
+        risk_to_stop = None
+        if entry and sl and qty:
+            raw = (entry - sl) * qty if direction == "long" else (sl - entry) * qty
+            risk_to_stop = round(max(0.0, raw), 2)
+            total_risk += risk_to_stop
+
+        # Unrealized PnL — needs live price
+        unrealized_pnl = None
+        if current_price and entry and qty:
+            raw_pnl = (current_price - entry) * qty if direction == "long" else (entry - current_price) * qty
+            unrealized_pnl = round(raw_pnl, 2)
+            total_unrealized_pnl += unrealized_pnl
+
+        per_position.append({
+            "position_id": pos["id"],
+            "ticker": pos["ticker"],
+            "direction": direction,
+            "status": pos["status"],
+            "current_price": current_price,
+            "current_stop_loss": sl,
+            "actual_entry_price": entry,
+            "remaining_quantity": qty,
+            "unrealized_pnl": unrealized_pnl,
+            "risk_to_stop": risk_to_stop,
+            "price_unavailable": current_price is None,
+        })
+
+    return {
+        "total_open_risk": round(total_risk, 2),
+        "total_unrealized_pnl": round(total_unrealized_pnl, 2),
+        "max_downside_to_stops": round(total_risk, 2),
+        "open_positions_count": open_count,
+        "reduced_positions_count": reduced_count,
+        "per_position": per_position,
+    }
+
+
 @router.get("/{position_id}")
 async def get_position(
     position_id: str,

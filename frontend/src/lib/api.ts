@@ -5,6 +5,7 @@ import type {
   Trade,
   TradeStats,
   Strategy,
+  RiskSummary,
   CreateSignal,
   UpdateSignal,
   TakeSignal,
@@ -108,6 +109,8 @@ export const positionsApi = {
 
   /** Returns all open AND reduced positions with their pending actions. */
   open: () => apiFetch<Position[]>("/positions/open"),
+
+  riskSummary: () => apiFetch<RiskSummary>("/positions/risk-summary"),
 
   get: (id: string) => apiFetch<Position>(`/positions/${id}`),
 

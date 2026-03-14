@@ -164,6 +164,29 @@ export interface TradeStats {
   profit_factor: number | null;
 }
 
+export interface PositionRisk {
+  position_id: string;
+  ticker: string;
+  direction: SignalDirection;
+  status: PositionStatus;
+  current_price: number | null;
+  current_stop_loss: number | null;
+  actual_entry_price: number | null;
+  remaining_quantity: number | null;
+  unrealized_pnl: number | null;
+  risk_to_stop: number | null;
+  price_unavailable: boolean;
+}
+
+export interface RiskSummary {
+  total_open_risk: number;
+  total_unrealized_pnl: number;
+  max_downside_to_stops: number;
+  open_positions_count: number;
+  reduced_positions_count: number;
+  per_position: PositionRisk[];
+}
+
 // ─── Request types ──────────────────────────────────────────────────────────
 
 export interface TakeSignal {
