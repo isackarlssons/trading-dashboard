@@ -226,11 +226,20 @@ async def create_position_from_signal(
     qty = data.get("quantity")
     actual_entry = data.get("entry_price")
     current_sl = data.get("stop_loss") or signal.get("stop_loss")
+    direction = signal["direction"]
+
+    # ── Compute initial risk at entry ─────────────────────────────────────────
+    irps = None
+    if actual_entry and current_sl:
+        raw_risk = (actual_entry - current_sl) if direction == "long" else (current_sl - actual_entry)
+        irps = round(raw_risk, 6) if raw_risk > 0 else None
+
+    sig_meta = signal.get("metadata") or {}
 
     position_data = {
         "signal_id": signal["id"],
         "ticker": signal["ticker"],
-        "direction": signal["direction"],
+        "direction": direction,
         "market": signal.get("market"),
         # Legacy fields
         "entry_price": actual_entry,
@@ -250,6 +259,17 @@ async def create_position_from_signal(
         "notes": data.get("notes"),
         "opened_at": now,
         "status": "open",
+        # ── Smart exit context ─────────────────────────────────────────────────
+        "initial_stop_loss": current_sl,
+        "initial_risk_per_share": irps,
+        "atr_at_entry": sig_meta.get("atr"),
+        "regime_at_entry": sig_meta.get("regime"),
+        "entry_context": {
+            "signal_id": signal["id"],
+            "strategy_id": signal.get("strategy_id"),
+            "confidence": signal.get("confidence"),
+            "signal_metadata": sig_meta,
+        },
     }
     pos_result = sb.table("positions").insert(position_data).execute()
 
@@ -273,6 +293,10 @@ async def update_position(
     allowed_fields = {
         "stop_loss", "current_stop_loss", "take_profit",
         "notes", "remaining_quantity", "quantity", "avg_entry_price",
+        # Smart exit context — written by bot on each run
+        "highest_price_seen", "lowest_price_seen",
+        "initial_stop_loss", "initial_risk_per_share",
+        "atr_at_entry", "regime_at_entry", "entry_context",
     }
     update_data = {k: v for k, v in data.items() if k in allowed_fields}
 

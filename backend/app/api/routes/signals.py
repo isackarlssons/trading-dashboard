@@ -144,12 +144,24 @@ async def take_signal(
     qty = data.get("quantity")
     actual_entry = data.get("actual_entry_price") or data.get("entry_price") or signal.get("entry_price")
     current_sl = data.get("stop_loss") or signal.get("stop_loss")
+    direction = signal["direction"]
+
+    # ── Compute initial risk at entry ─────────────────────────────────────────
+    irps = None
+    if actual_entry and current_sl:
+        raw_risk = (actual_entry - current_sl) if direction == "long" else (current_sl - actual_entry)
+        irps = round(raw_risk, 6) if raw_risk > 0 else None
+
+    # ── Signal metadata for smart exit context ────────────────────────────────
+    sig_meta = signal.get("metadata") or {}
+    atr_at_entry = sig_meta.get("atr")
+    regime_at_entry = sig_meta.get("regime")
 
     # Create position with both legacy and new field names for full compatibility
     position_data = {
         "signal_id": signal["id"],
         "ticker": signal["ticker"],
-        "direction": signal["direction"],
+        "direction": direction,
         "market": signal.get("market"),
         # Legacy field (kept for backward compat)
         "entry_price": actual_entry,
@@ -169,6 +181,17 @@ async def take_signal(
         "opened_at": now,
         "status": "open",
         "notes": data.get("notes"),
+        # ── Smart exit context ─────────────────────────────────────────────────
+        "initial_stop_loss": current_sl,
+        "initial_risk_per_share": irps,
+        "atr_at_entry": atr_at_entry,
+        "regime_at_entry": regime_at_entry,
+        "entry_context": {
+            "signal_id": signal["id"],
+            "strategy_id": signal.get("strategy_id"),
+            "confidence": signal.get("confidence"),
+            "signal_metadata": sig_meta,
+        },
     }
     pos_result = sb.table("positions").insert(position_data).execute()
 
