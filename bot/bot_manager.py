@@ -245,17 +245,25 @@ def evaluate_position(position: dict, price: float) -> list[dict]:
 
     # ── Initial risk ──────────────────────────────────────────────────────────
     isl, irps = get_initial_risk(position)
-    if not irps or irps <= 0:
-        log.warning(f"  [{ticker}] Cannot compute initial risk (irps={irps}) — skipping")
-        return actions
+    r_available = irps is not None and irps > 0
 
-    # ── R-multiple ────────────────────────────────────────────────────────────
-    if direction == "long":
-        r_multiple = (price - entry) / irps
-        is_profitable = price > entry
+    # ── R-multiple (only when initial risk is known) ──────────────────────────
+    r_multiple: float | None = None
+    is_profitable = False
+
+    if r_available:
+        if direction == "long":
+            r_multiple = (price - entry) / irps
+            is_profitable = price > entry
+        else:
+            r_multiple = (entry - price) / irps
+            is_profitable = price < entry
     else:
-        r_multiple = (entry - price) / irps
-        is_profitable = price < entry
+        is_profitable = (direction == "long" and price > entry) or (direction == "short" and price < entry)
+        log.warning(
+            f"  [{ticker}] R-based smart exit disabled — initial risk unavailable "
+            f"(irps={irps}); trailing-only mode enabled"
+        )
 
     # ── Regime and ATR ────────────────────────────────────────────────────────
     atr, atr_source, regime, regime_source = get_atr_and_regime(position)
@@ -270,7 +278,8 @@ def evaluate_position(position: dict, price: float) -> list[dict]:
 
     log.info(
         f"  [{ticker}] {direction.upper()} | entry={entry} price={price:.4f} "
-        f"r={r_multiple:.2f}R isl={isl} irps={irps:.4f} "
+        f"r={'N/A' if r_multiple is None else f'{r_multiple:.2f}R'} "
+        f"isl={isl} irps={irps} "
         f"regime={regime}({regime_source}) atr={atr}({atr_source}) "
         f"extreme={extreme:.4f}"
     )
@@ -278,8 +287,8 @@ def evaluate_position(position: dict, price: float) -> list[dict]:
     # ── Stop candidates — best one only ───────────────────────────────────────
     stop_candidates: list[dict] = []
 
-    # Candidate A: move to breakeven
-    if r_multiple >= BREAKEVEN_R and is_profitable and current_sl is not None and isl is not None:
+    # Candidate A: move to breakeven (requires valid R)
+    if r_available and r_multiple is not None and r_multiple >= BREAKEVEN_R and is_profitable and current_sl is not None:
         needs_improvement = (
             (direction == "long"  and current_sl < entry) or
             (direction == "short" and current_sl > entry)
@@ -332,10 +341,12 @@ def evaluate_position(position: dict, price: float) -> list[dict]:
             "reason":        best["reason"],
         })
 
-    # ── Partial take (regime-aware R threshold) ───────────────────────────────
+    # ── Partial take (requires valid R — skipped in trailing-only mode) ─────────
     partial_r = PARTIAL_R_BY_REGIME.get(regime, 1.5)
     if (
-        r_multiple >= partial_r
+        r_available
+        and r_multiple is not None
+        and r_multiple >= partial_r
         and "take_partial" not in pending
         and remaining
     ):
