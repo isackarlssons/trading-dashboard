@@ -20,6 +20,7 @@ Optional environment variables:
 import os
 import sys
 import logging
+import time
 import requests
 
 # Allow importing the shared backend service from the sibling directory
@@ -65,21 +66,75 @@ PARTIAL_R_BY_REGIME = {
 
 # ─── API helpers ─────────────────────────────────────────────────────────────
 
-def api_get(path: str) -> list | dict:
-    r = requests.get(f"{API_BASE}{path}", headers=HEADERS, timeout=15)
+_API_TIMEOUT    = 30
+_MAX_RETRIES    = 3
+_RETRY_DELAYS   = [2, 4]          # seconds before attempt 2 and 3
+_RETRY_ON_EXC   = (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError)
+_NO_RETRY_CODES = {400, 401, 403, 404, 422}   # permanent client errors
+
+
+def _api_request(method: str, path: str, **kwargs) -> requests.Response:
+    """Retry wrapper for all dashboard API calls.
+
+    - Timeout: 30 s per attempt
+    - Retries: up to 3 total (2 retries after the first attempt)
+    - Backoff:  2 s before attempt 2, 4 s before attempt 3
+    - Retries on: ReadTimeout, ConnectionError, 5xx responses
+    - No retry on: 4xx client errors (400, 401, 403, 404, 422)
+    """
+    url = f"{API_BASE}{path}"
+    last_exc: Exception | None = None
+
+    for attempt in range(1, _MAX_RETRIES + 1):
+        log.debug(f"[api] {method} {path} attempt {attempt}/{_MAX_RETRIES} (timeout={_API_TIMEOUT}s)")
+        try:
+            r = requests.request(
+                method, url,
+                headers=HEADERS,
+                timeout=_API_TIMEOUT,
+                **kwargs,
+            )
+            # Permanent client errors — raise immediately, no retry
+            if r.status_code in _NO_RETRY_CODES:
+                r.raise_for_status()
+                return r
+            # Transient server errors — retry
+            if r.status_code >= 500:
+                msg = f"HTTP {r.status_code}"
+                log.warning(f"[api] {method} {path} attempt {attempt}/{_MAX_RETRIES} failed: {msg}")
+            else:
+                r.raise_for_status()
+                return r
+
+        except _RETRY_ON_EXC as exc:
+            log.warning(f"[api] {method} {path} attempt {attempt}/{_MAX_RETRIES} failed: {type(exc).__name__}: {exc}")
+            last_exc = exc
+
+        if attempt < _MAX_RETRIES:
+            delay = _RETRY_DELAYS[attempt - 1]
+            log.info(f"[api] retrying in {delay}s…")
+            time.sleep(delay)
+
+    # All attempts exhausted
+    if last_exc:
+        raise last_exc
+    # Last attempt was a 5xx — raise it
     r.raise_for_status()
+    return r  # unreachable but satisfies type checker
+
+
+def api_get(path: str) -> list | dict:
+    r = _api_request("GET", path)
     return r.json()
 
 
 def api_post(path: str, body: dict) -> dict:
-    r = requests.post(f"{API_BASE}{path}", json=body, headers=HEADERS, timeout=15)
-    r.raise_for_status()
+    r = _api_request("POST", path, json=body)
     return r.json()
 
 
 def api_patch(path: str, body: dict) -> dict:
-    r = requests.patch(f"{API_BASE}{path}", json=body, headers=HEADERS, timeout=15)
-    r.raise_for_status()
+    r = _api_request("PATCH", path, json=body)
     return r.json()
 
 
