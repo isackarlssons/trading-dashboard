@@ -348,54 +348,41 @@ async def close_position(
     entry_price = position.get("actual_entry_price") or position.get("entry_price")
     now = datetime.utcnow().isoformat()
 
-    if position["direction"] == "long":
-        pnl_percent = ((exit_price - entry_price) / entry_price) * 100
-    else:
-        pnl_percent = ((entry_price - exit_price) / entry_price) * 100
-
-    partials_result = (
+    prior_partials = (
         sb.table("partial_exits")
         .select("*")
         .eq("position_id", position_id)
         .execute()
-    )
-    prior_partials = partials_result.data or []
+    ).data or []
 
-    remaining_qty = position.get("remaining_quantity") or position.get("quantity")
+    remaining_qty = position.get("remaining_quantity") or position.get("quantity") or 0
     original_qty = position.get("original_quantity") or position.get("quantity")
 
-    pnl = None
-    if remaining_qty:
-        if position["direction"] == "long":
-            pnl = (exit_price - entry_price) * remaining_qty - fees
-        else:
-            pnl = (entry_price - exit_price) * remaining_qty - fees
+    # Weighted average exit price across all exits (partials + final close)
+    partial_weighted_sum = sum(
+        (p.get("exit_price") or p.get("price") or 0) * (p.get("quantity") or p.get("quantity_sold") or 0)
+        for p in prior_partials
+    )
+    partial_qty = sum(p.get("quantity") or p.get("quantity_sold") or 0 for p in prior_partials)
+    weighted_sum = partial_weighted_sum + exit_price * remaining_qty
+    total_qty = partial_qty + remaining_qty
+    avg_exit = weighted_sum / total_qty if total_qty > 0 else exit_price
 
-    if prior_partials:
-        partial_pnl = sum(p.get("pnl", 0) or 0 for p in prior_partials)
-        partial_fees = sum(p.get("fees", 0) or 0 for p in prior_partials)
-        total_pnl = (pnl or 0) + partial_pnl
-        total_fees = fees + partial_fees
+    # Total fees (final close + all prior partial exits)
+    partial_fees = sum(p.get("fees", 0) or 0 for p in prior_partials)
+    total_fees = fees + partial_fees
 
-        partial_exit_value = sum((p.get("exit_price") or p.get("price") or 0) * (p.get("quantity") or p.get("quantity_sold") or 0) for p in prior_partials)
-        partial_exit_qty = sum(p.get("quantity") or p.get("quantity_sold") or 0 for p in prior_partials)
-        final_exit_value = exit_price * (remaining_qty or 0)
-        total_exit_qty = partial_exit_qty + (remaining_qty or 0)
-        avg_exit = (partial_exit_value + final_exit_value) / total_exit_qty if total_exit_qty > 0 else exit_price
-
-        if position["direction"] == "long":
-            overall_pnl_pct = ((avg_exit - entry_price) / entry_price) * 100
-        else:
-            overall_pnl_pct = ((entry_price - avg_exit) / entry_price) * 100
+    # PnL = exit proceeds − entry cost − fees
+    if position["direction"] == "long":
+        pnl = weighted_sum - entry_price * total_qty - total_fees
+        pnl_pct = ((avg_exit - entry_price) / entry_price) * 100 if entry_price else 0
     else:
-        total_pnl = pnl
-        total_fees = fees
-        avg_exit = exit_price
-        overall_pnl_pct = pnl_percent
+        pnl = entry_price * total_qty - weighted_sum - total_fees
+        pnl_pct = ((entry_price - avg_exit) / entry_price) * 100 if entry_price else 0
 
-    if abs(overall_pnl_pct) < 0.1:
+    if abs(pnl_pct) < 0.1:
         result = "breakeven"
-    elif overall_pnl_pct > 0:
+    elif pnl_pct > 0:
         result = "win"
     else:
         result = "loss"
@@ -413,8 +400,8 @@ async def close_position(
         "entry_price": entry_price,
         "exit_price": round(avg_exit, 2),
         "quantity": original_qty,
-        "pnl": round(total_pnl, 2) if total_pnl is not None else None,
-        "pnl_percent": round(overall_pnl_pct, 2),
+        "pnl": round(pnl, 2) if pnl is not None else None,
+        "pnl_percent": round(pnl_pct, 2),
         "result": result,
         "fees": total_fees,
         "notes": data.get("notes") or position.get("notes"),
