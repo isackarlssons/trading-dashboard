@@ -23,7 +23,7 @@ import sys
 import logging
 import requests
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger("bot")
 
 # ─── Config ──────────────────────────────────────────────────────────────────
@@ -60,20 +60,50 @@ def api_post(path: str, body: dict) -> dict:
 
 # ─── Market data ─────────────────────────────────────────────────────────────
 
-def get_current_price(ticker: str) -> float | None:
+def get_current_price(ticker: str, market: str | None = None, symbol_override: str | None = None) -> float | None:
     """Fetch the latest price for a ticker.
 
-    Replace with your actual data source:
-      - yfinance:  yf.Ticker(ticker).fast_info["last_price"]
-      - broker API, websocket feed, etc.
+    Args:
+        ticker:          Position ticker from DB (e.g. "SLB")
+        market:          Market field from position (e.g. "US", "SE") — informational
+        symbol_override: Use this symbol instead of ticker (e.g. execution_symbol)
+
+    Returns float price or None if unavailable.
     """
+    lookup_symbol = symbol_override or ticker
+    source = "yfinance/fast_info"
+
+    log.debug(
+        f"  [price] ticker={ticker!r}  market={market!r}  "
+        f"symbol={lookup_symbol!r}  source={source}"
+    )
+
     try:
         import yfinance as yf
-        info = yf.Ticker(ticker).fast_info
-        price = info.get("last_price") or info.get("regularMarketPrice")
-        return float(price) if price else None
+        info = yf.Ticker(lookup_symbol).fast_info
+
+        # ── Debug: show all available keys and their values ──────────────────
+        try:
+            available = {k: info[k] for k in info.keys()}
+            log.debug(f"  [price] fast_info keys for {lookup_symbol!r}: {available}")
+        except Exception:
+            log.debug(f"  [price] fast_info not iterable for {lookup_symbol!r} — type: {type(info)}")
+
+        # NOTE: fast_info uses camelCase keys, NOT snake_case.
+        # Wrong:  "last_price", "regularMarketPrice"
+        # Correct: "lastPrice"
+        price = info.get("lastPrice") or info.get("regularMarketPreviousClose")
+
+        log.debug(f"  [price] raw lastPrice={info.get('lastPrice')!r}  regularMarketPreviousClose={info.get('regularMarketPreviousClose')!r}  → selected={price!r}")
+
+        if price:
+            return float(price)
+
+        log.warning(f"  [price] {lookup_symbol!r}: all price keys returned None/0 — position will be skipped")
+        return None
+
     except Exception as e:
-        log.warning(f"Price fetch failed for {ticker}: {e}")
+        log.warning(f"  [price] {lookup_symbol!r}: exception from yfinance: {type(e).__name__}: {e}")
         return None
 
 
@@ -191,7 +221,8 @@ def run() -> None:
 
     for pos in positions:
         ticker = pos["ticker"]
-        price = get_current_price(ticker)
+        market = pos.get("market")
+        price = get_current_price(ticker, market=market)
 
         if price is None:
             log.warning(f"  [{ticker}] No price available, skipping")
