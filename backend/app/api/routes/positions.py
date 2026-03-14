@@ -410,6 +410,14 @@ async def close_position(
     }
     trade_result = sb.table("trades").insert(trade_data).execute()
 
+    # Mark a close_full action as executed if one triggered this close
+    action_id = data.get("action_id")
+    if action_id:
+        sb.table("position_actions").update({
+            "execution_state": "executed",
+            "executed_at": now,
+        }).eq("id", action_id).execute()
+
     return trade_result.data[0] if trade_result.data else {}
 
 

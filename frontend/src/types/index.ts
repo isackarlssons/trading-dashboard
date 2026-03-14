@@ -188,6 +188,7 @@ export interface ClosePosition {
   exit_price: number;
   fees?: number;
   notes?: string;
+  action_id?: string;
 }
 
 export interface PartialClosePosition {

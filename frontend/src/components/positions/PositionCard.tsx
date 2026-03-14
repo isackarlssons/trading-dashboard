@@ -15,7 +15,8 @@ interface PositionCardProps {
   onClose: (positionId: string) => void;
   onPartialClose: (positionId: string) => void;
   onAcknowledgeAction: (actionId: string) => void;
-  onExecuteAction: (actionId: string) => void;
+  onExecuteAction: (action: PositionAction) => void;
+  onDismissAction: (actionId: string) => void;
 }
 
 export function PositionCard({
@@ -24,6 +25,7 @@ export function PositionCard({
   onPartialClose,
   onAcknowledgeAction,
   onExecuteAction,
+  onDismissAction,
 }: PositionCardProps) {
   const pendingActions = (position.position_actions || []).filter(
     (a) => a.execution_state === "pending" || a.execution_state === "acknowledged"
@@ -94,6 +96,7 @@ export function PositionCard({
                 action={action}
                 onAcknowledge={onAcknowledgeAction}
                 onExecute={onExecuteAction}
+                onDismiss={onDismissAction}
               />
             ))}
           </div>
@@ -116,8 +119,7 @@ export function PositionCard({
               </span>
               <span
                 style={{
-                  color:
-                    (pe.pnl_percent || 0) >= 0 ? "var(--green)" : "var(--red)",
+                  color: (pe.pnl_percent || 0) >= 0 ? "var(--green)" : "var(--red)",
                 }}
               >
                 {(pe.pnl_percent || 0) > 0 ? "+" : ""}
@@ -182,10 +184,12 @@ function ActionRow({
   action,
   onAcknowledge,
   onExecute,
+  onDismiss,
 }: {
   action: PositionAction;
   onAcknowledge: (id: string) => void;
-  onExecute: (id: string) => void;
+  onExecute: (action: PositionAction) => void;
+  onDismiss: (id: string) => void;
 }) {
   const label = ACTION_LABELS[action.action_type] || action.action_type;
 
@@ -227,12 +231,19 @@ function ActionRow({
         )}
         {action.execution_state === "acknowledged" && (
           <button
-            onClick={() => onExecute(action.id)}
+            onClick={() => onExecute(action)}
             className="font-['DM_Mono',monospace] text-[10px] text-[var(--green)] border border-[#B0D4B0] px-[8px] py-[2px] rounded-[3px] hover:bg-[var(--green3)] transition-colors cursor-pointer bg-transparent"
           >
             Utförd ✓
           </button>
         )}
+        <button
+          onClick={() => onDismiss(action.id)}
+          className="font-['DM_Mono',monospace] text-[10px] text-[var(--ink4)] border border-[var(--border)] px-[6px] py-[2px] rounded-[3px] hover:bg-[var(--cream2)] transition-colors cursor-pointer bg-transparent"
+          title="Avfärda"
+        >
+          ✕
+        </button>
       </div>
     </div>
   );

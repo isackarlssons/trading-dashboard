@@ -110,14 +110,61 @@ async def update_action(
     data: dict,
     user: dict = Depends(get_current_user),
 ):
-    """Update action execution state (acknowledged / executed / dismissed)."""
+    """Update action execution state (acknowledged / executed / dismissed).
+
+    When marking raise_stop or move_stop_to_breakeven as executed, the
+    position's current_stop_loss (and legacy stop_loss) is updated automatically.
+    """
     sb = get_supabase()
+
+    # Fetch action first so we can apply side-effects on execute
+    action_result = (
+        sb.table("position_actions")
+        .select("*")
+        .eq("id", action_id)
+        .single()
+        .execute()
+    )
+    if not action_result.data:
+        raise HTTPException(status_code=404, detail="Action not found")
+    action = action_result.data
 
     update_data = {}
     if "execution_state" in data:
-        update_data["execution_state"] = data["execution_state"]
-        if data["execution_state"] == "executed":
-            update_data["executed_at"] = datetime.utcnow().isoformat()
+        new_state = data["execution_state"]
+        update_data["execution_state"] = new_state
+
+        if new_state == "executed":
+            now = datetime.utcnow().isoformat()
+            update_data["executed_at"] = now
+
+            # Auto-update position stop loss for stop-management actions
+            if action["action_type"] == "raise_stop" and action.get("new_stop_loss"):
+                sb.table("positions").update({
+                    "current_stop_loss": action["new_stop_loss"],
+                    "stop_loss": action["new_stop_loss"],
+                }).eq("id", action["position_id"]).execute()
+
+            elif action["action_type"] == "move_stop_to_breakeven":
+                breakeven = action.get("new_stop_loss")
+                if breakeven is None:
+                    pos_result = (
+                        sb.table("positions")
+                        .select("actual_entry_price, entry_price")
+                        .eq("id", action["position_id"])
+                        .single()
+                        .execute()
+                    )
+                    if pos_result.data:
+                        breakeven = (
+                            pos_result.data.get("actual_entry_price")
+                            or pos_result.data.get("entry_price")
+                        )
+                if breakeven:
+                    sb.table("positions").update({
+                        "current_stop_loss": breakeven,
+                        "stop_loss": breakeven,
+                    }).eq("id", action["position_id"]).execute()
 
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid fields to update")

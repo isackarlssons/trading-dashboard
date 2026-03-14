@@ -1,28 +1,50 @@
 """
-bot_manager.py — Position management bot example.
+bot_manager.py — Position management bot.
 
-Fetches open positions via the dashboard API and posts management actions
-(raise stop, take partial, etc.) back through the API. Never touches the DB.
+Fetches open positions from the trading dashboard API and creates management
+actions (raise stop, move to breakeven, take partial, close full) via API only.
+Never writes directly to Supabase.
 
 Usage:
     python bot_manager.py
 
-Environment variables:
-    DASHBOARD_API_URL   e.g. https://your-api.example.com/api/v1
-    DASHBOARD_API_TOKEN Bearer token (Supabase JWT from a service account)
+Environment variables (required):
+    DASHBOARD_API_URL   Base URL, e.g. https://your-api.example.com/api/v1
+    DASHBOARD_API_TOKEN Supabase JWT from a service account or long-lived token
+
+Optional environment variables:
+    TRAILING_STOP_PCT   Trailing stop distance as fraction of entry (default 0.05 = 5%)
+    PARTIAL_TAKE_PCT    Profit % at which to take 50% off the table (default 5.0)
+    BREAKEVEN_AT_PCT    Profit % at which to move stop to breakeven (default 3.0)
 """
 
 import os
+import sys
+import logging
 import requests
 
-API_BASE = os.environ["DASHBOARD_API_URL"].rstrip("/")
-TOKEN = os.environ["DASHBOARD_API_TOKEN"]
+logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
+log = logging.getLogger("bot")
+
+# ─── Config ──────────────────────────────────────────────────────────────────
+
+try:
+    API_BASE = os.environ["DASHBOARD_API_URL"].rstrip("/")
+    TOKEN = os.environ["DASHBOARD_API_TOKEN"]
+except KeyError as e:
+    sys.exit(f"Missing required environment variable: {e}")
+
+TRAILING_STOP_PCT = float(os.environ.get("TRAILING_STOP_PCT", "0.05"))
+PARTIAL_TAKE_PCT  = float(os.environ.get("PARTIAL_TAKE_PCT", "5.0"))
+BREAKEVEN_AT_PCT  = float(os.environ.get("BREAKEVEN_AT_PCT", "3.0"))
 
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
     "Content-Type": "application/json",
 }
 
+
+# ─── API helpers ─────────────────────────────────────────────────────────────
 
 def api_get(path: str) -> list | dict:
     r = requests.get(f"{API_BASE}{path}", headers=HEADERS, timeout=15)
@@ -36,106 +58,158 @@ def api_post(path: str, body: dict) -> dict:
     return r.json()
 
 
-# ─── Analysis helpers ────────────────────────────────────────────────────────
-
-def should_raise_stop(position: dict, current_price: float) -> float | None:
-    """Return a new stop-loss level if the trailing stop should be raised."""
-    entry = position.get("actual_entry_price") or position.get("entry_price")
-    current_sl = position.get("current_stop_loss") or position.get("stop_loss")
-    if not entry or not current_sl:
-        return None
-
-    if position["direction"] == "long":
-        gain_pct = (current_price - entry) / entry * 100
-        # Example: raise stop to break-even once 3 % in profit
-        if gain_pct >= 3.0 and current_sl < entry:
-            return entry  # move to break-even
-        # Example: trailing stop at 50 % of current gain
-        trailing = current_price - (current_price - entry) * 0.5
-        if trailing > current_sl + 0.01:
-            return round(trailing, 2)
-    else:
-        gain_pct = (entry - current_price) / entry * 100
-        if gain_pct >= 3.0 and current_sl > entry:
-            return entry
-        trailing = current_price + (entry - current_price) * 0.5
-        if trailing < current_sl - 0.01:
-            return round(trailing, 2)
-
-    return None
-
-
-def should_take_partial(position: dict, current_price: float) -> float | None:
-    """Return sell_percent if a partial exit should be taken."""
-    entry = position.get("actual_entry_price") or position.get("entry_price")
-    if not entry:
-        return None
-
-    if position["direction"] == "long":
-        gain_pct = (current_price - entry) / entry * 100
-    else:
-        gain_pct = (entry - current_price) / entry * 100
-
-    # Example: take 50 % off the table at 5 % gain
-    if gain_pct >= 5.0:
-        return 50.0
-
-    return None
-
+# ─── Market data ─────────────────────────────────────────────────────────────
 
 def get_current_price(ticker: str) -> float | None:
-    """Placeholder: fetch real-time price from your data source."""
-    # Replace with your actual market data call (e.g. yfinance, broker API).
-    return None
+    """Fetch the latest price for a ticker.
+
+    Replace with your actual data source:
+      - yfinance:  yf.Ticker(ticker).fast_info["last_price"]
+      - broker API, websocket feed, etc.
+    """
+    try:
+        import yfinance as yf
+        info = yf.Ticker(ticker).fast_info
+        price = info.get("last_price") or info.get("regularMarketPrice")
+        return float(price) if price else None
+    except Exception as e:
+        log.warning(f"Price fetch failed for {ticker}: {e}")
+        return None
 
 
-# ─── Main loop ───────────────────────────────────────────────────────────────
+# ─── Management logic ─────────────────────────────────────────────────────────
+
+def existing_pending_types(position: dict) -> set[str]:
+    """Return the set of action_types that already have a pending action."""
+    return {
+        a["action_type"]
+        for a in (position.get("position_actions") or [])
+        if a["execution_state"] == "pending"
+    }
+
+
+def evaluate_position(position: dict, price: float) -> list[dict]:
+    """Return a list of actions to create for this position (may be empty)."""
+    actions = []
+    pending = existing_pending_types(position)
+
+    entry = position.get("actual_entry_price") or position.get("entry_price")
+    current_sl = position.get("current_stop_loss") or position.get("stop_loss")
+    remaining = position.get("remaining_quantity") or position.get("quantity")
+
+    if not entry:
+        log.warning(f"  [{position['ticker']}] No entry price, skipping")
+        return actions
+
+    direction = position["direction"]
+
+    if direction == "long":
+        gain_pct = (price - entry) / entry * 100
+        is_profitable = price > entry
+    else:
+        gain_pct = (entry - price) / entry * 100
+        is_profitable = price < entry
+
+    log.info(f"  [{position['ticker']}] {direction.upper()} | entry={entry} | price={price:.4f} | gain={gain_pct:.2f}%")
+
+    # ── A. Move stop to breakeven ────────────────────────────────────────────
+    if (
+        gain_pct >= BREAKEVEN_AT_PCT
+        and is_profitable
+        and current_sl is not None
+        and "move_stop_to_breakeven" not in pending
+    ):
+        # Only suggest if current SL is still below breakeven (long) or above (short)
+        needs_be = (direction == "long" and current_sl < entry) or \
+                   (direction == "short" and current_sl > entry)
+        if needs_be:
+            actions.append({
+                "position_id": position["id"],
+                "action_type": "move_stop_to_breakeven",
+                "new_stop_loss": entry,
+                "reason": f"Gain {gain_pct:.1f}% ≥ {BREAKEVEN_AT_PCT}% — move stop to breakeven {entry}",
+            })
+
+    # ── B. Raise stop (trailing) ─────────────────────────────────────────────
+    if "raise_stop" not in pending and current_sl is not None and is_profitable:
+        if direction == "long":
+            trailing_sl = round(price * (1 - TRAILING_STOP_PCT), 4)
+            if trailing_sl > current_sl + 0.001:
+                actions.append({
+                    "position_id": position["id"],
+                    "action_type": "raise_stop",
+                    "old_stop_loss": current_sl,
+                    "new_stop_loss": trailing_sl,
+                    "reason": f"Trailing stop: price {price:.4f} → SL {trailing_sl:.4f} ({TRAILING_STOP_PCT*100:.0f}% trail)",
+                })
+        else:  # short
+            trailing_sl = round(price * (1 + TRAILING_STOP_PCT), 4)
+            if trailing_sl < current_sl - 0.001:
+                actions.append({
+                    "position_id": position["id"],
+                    "action_type": "raise_stop",
+                    "old_stop_loss": current_sl,
+                    "new_stop_loss": trailing_sl,
+                    "reason": f"Trailing stop (short): price {price:.4f} → SL {trailing_sl:.4f}",
+                })
+
+    # ── C. Take partial profit ───────────────────────────────────────────────
+    if (
+        gain_pct >= PARTIAL_TAKE_PCT
+        and "take_partial" not in pending
+        and remaining
+    ):
+        sell_qty = remaining * 0.5  # take 50% off
+        actions.append({
+            "position_id": position["id"],
+            "action_type": "take_partial",
+            "sell_percent": 50.0,
+            "sell_quantity": sell_qty,
+            "reason": f"Gain {gain_pct:.1f}% ≥ {PARTIAL_TAKE_PCT}% — take 50% partial",
+        })
+
+    # ── D. Close full (stop hit) ─────────────────────────────────────────────
+    if current_sl is not None and "close_full" not in pending:
+        stop_hit = (direction == "long" and price <= current_sl) or \
+                   (direction == "short" and price >= current_sl)
+        if stop_hit:
+            actions.append({
+                "position_id": position["id"],
+                "action_type": "close_full",
+                "reason": f"Stop loss hit: price {price:.4f} {'≤' if direction == 'long' else '≥'} SL {current_sl}",
+            })
+
+    return actions
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
 
 def run() -> None:
+    log.info("Fetching open positions…")
     positions = api_get("/positions/open")
-    print(f"[bot] {len(positions)} open/reduced position(s)")
+    log.info(f"Found {len(positions)} open/reduced position(s)")
 
     for pos in positions:
         ticker = pos["ticker"]
-        pos_id = pos["id"]
+        price = get_current_price(ticker)
 
-        current_price = get_current_price(ticker)
-        if current_price is None:
-            print(f"  [{ticker}] price unavailable, skipping")
+        if price is None:
+            log.warning(f"  [{ticker}] No price available, skipping")
             continue
 
-        existing_action_types = {
-            a["action_type"]
-            for a in (pos.get("position_actions") or [])
-            if a["execution_state"] == "pending"
-        }
+        actions_to_create = evaluate_position(pos, price)
 
-        # ── Raise stop ────────────────────────────────────────────────────
-        new_sl = should_raise_stop(pos, current_price)
-        if new_sl and "raise_stop" not in existing_action_types:
-            old_sl = pos.get("current_stop_loss") or pos.get("stop_loss")
-            action = api_post("/position-actions/", {
-                "position_id": pos_id,
-                "action_type": "raise_stop",
-                "old_stop_loss": old_sl,
-                "new_stop_loss": new_sl,
-                "reason": f"Trailing stop: price {current_price} → new SL {new_sl}",
-            })
-            print(f"  [{ticker}] raise_stop action created (id={action['id']})")
-
-        # ── Take partial ──────────────────────────────────────────────────
-        sell_pct = should_take_partial(pos, current_price)
-        if sell_pct and "take_partial" not in existing_action_types:
-            remaining = pos.get("remaining_quantity") or pos.get("quantity")
-            sell_qty = round((remaining or 0) * sell_pct / 100, 4) if remaining else None
-            action = api_post("/position-actions/", {
-                "position_id": pos_id,
-                "action_type": "take_partial",
-                "sell_percent": sell_pct,
-                "sell_quantity": sell_qty,
-                "reason": f"Partial exit at {sell_pct:.0f}% gain (price={current_price})",
-            })
-            print(f"  [{ticker}] take_partial action created (id={action['id']})")
+        for action_data in actions_to_create:
+            try:
+                result = api_post("/position-actions/", action_data)
+                # If the action already existed (dedup), the API returns the existing one
+                is_new = result.get("created_at") and result.get("execution_state") == "pending"
+                log.info(
+                    f"  [{ticker}] {'Created' if is_new else 'Already pending'}: "
+                    f"{action_data['action_type']} — {action_data.get('reason', '')}"
+                )
+            except requests.HTTPError as e:
+                log.error(f"  [{ticker}] Failed to create action: {e.response.text}")
 
 
 if __name__ == "__main__":
