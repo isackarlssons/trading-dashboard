@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback } from "react";
 import { signalsApi, strategiesApi, riskApi } from "@/lib/api";
 import { SignalRow } from "@/components/signals/SignalRow";
 import { Card } from "@/components/ui/Card";
-import type { Signal, Strategy, TakeSignal } from "@/types";
+import type { Signal, Strategy, TakeSignal, SignalRiskPreview, SignalPreviewRequest } from "@/types";
 
 type TabFilter = "pending" | "taken" | "skipped" | "expired";
 
@@ -28,6 +28,7 @@ function SignalsContent() {
   const [success, setSuccess] = useState("");
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [generating, setGenerating] = useState(false);
+  const [riskPreviews, setRiskPreviews] = useState<Record<string, SignalRiskPreview>>({});
 
   // Take trade state
   const [takingSignal, setTakingSignal] = useState<Signal | null>(null);
@@ -47,17 +48,44 @@ function SignalsContent() {
     loadSignals();
   }, []);
 
+  const loadRiskPreviews = useCallback(async (pendingSignals: Signal[]) => {
+    const withPrices = pendingSignals.filter(
+      (s) => s.entry_price != null || s.stop_loss != null
+    );
+    if (withPrices.length === 0) return;
+    const requests: SignalPreviewRequest[] = withPrices.map((s) => ({
+      signal_id:          s.id,
+      ticker:             s.ticker,
+      direction:          s.direction,
+      entry_price:        s.entry_price ?? null,
+      stop_loss:          s.stop_loss   ?? null,
+      market:             s.market      ?? null,
+      strategy_id:        s.strategy_id ?? null,
+      strategy_family:    s.strategies?.strategy_family ?? s.strategy?.strategy_family ?? null,
+      instrument_currency: s.instrument_currency ?? null,
+    }));
+    try {
+      const previews = await riskApi.previewSignalsBulk(requests);
+      setRiskPreviews(previews);
+    } catch {
+      // Non-critical — signals page still usable without previews
+      console.warn("[risk] preview-signals-bulk unavailable");
+    }
+  }, []);
+
   const loadSignals = useCallback(async () => {
     try {
       setLoading(true);
       const data = await signalsApi.list();
       setSignals(data);
+      const pending = data.filter((s) => s.status === "pending");
+      loadRiskPreviews(pending);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadRiskPreviews]);
 
   // ─── Filter by tab ────────────────────────────────────────────────────────
   const filteredSignals = signals
@@ -145,6 +173,17 @@ function SignalsContent() {
       } else {
         setEntryPrice(signal.entry_price?.toString() || "");
       }
+      // Prefill suggested quantity from risk preview
+      const preview = riskPreviews[signal.id];
+      if (preview?.suggested_quantity != null && preview.suggested_quantity > 0) {
+        setQuantity(preview.suggested_quantity.toString());
+      } else {
+        setQuantity("");
+      }
+      // Show risk block immediately if signal is already blocked (don't wait for Confirm)
+      if (preview?.risk_status === "blocked" && preview.blocking_reasons.length > 0) {
+        setRiskBlock(preview.blocking_reasons);
+      }
     }
   }
 
@@ -199,6 +238,51 @@ function SignalsContent() {
       setTimeout(() => setSuccess(""), 3000);
     } catch (err: any) { setError(err.message); }
     finally { setGenerating(false); }
+  }
+
+  // ─── Risk preview strip renderer ─────────────────────────────────────────
+  function RiskPreviewStrip({ preview }: { preview: SignalRiskPreview }) {
+    const cfg = {
+      ok:      { color: "var(--green)", borderColor: "var(--green3)", bg: "var(--green4)", label: "OK"      },
+      limited: { color: "#92400e",      borderColor: "#d97706",       bg: "#fef9ec",       label: "LIMITED" },
+      blocked: { color: "var(--red)",   borderColor: "#dcc4c4",       bg: "var(--red2)",   label: "BLOCKED" },
+    }[preview.risk_status];
+
+    const primaryDetail =
+      preview.risk_status === "blocked"
+        ? (preview.blocking_reasons[0] ?? "portfolio limit reached")
+        : preview.max_quantity != null
+        ? `Max antal: ${preview.max_quantity}`
+        : null;
+
+    return (
+      <div
+        className="flex items-center gap-[10px] px-[22px] py-[5px] border-b border-[var(--border)] flex-wrap"
+        style={{ backgroundColor: cfg.bg, borderLeft: `3px solid ${cfg.borderColor}` }}
+      >
+        <span
+          className="font-['DM_Mono',monospace] text-[8px] font-semibold px-[6px] py-[2px] rounded-[3px] uppercase tracking-[0.8px]"
+          style={{ color: cfg.color, backgroundColor: `${cfg.color}18` }}
+        >
+          {cfg.label}
+        </span>
+        {primaryDetail && (
+          <span className="font-['DM_Mono',monospace] text-[10px]" style={{ color: cfg.color }}>
+            {primaryDetail}
+          </span>
+        )}
+        {preview.trade_risk_per_share_sek != null && preview.risk_status !== "blocked" && (
+          <span className="font-['DM_Mono',monospace] text-[9px] text-[var(--ink4)]">
+            · {preview.trade_risk_per_share_sek.toFixed(2)} SEK/aktie
+          </span>
+        )}
+        {preview.risk_status === "limited" && preview.portfolio_capacity_remaining_sek != null && (
+          <span className="font-['DM_Mono',monospace] text-[9px] text-[var(--ink4)]">
+            · portföljkap {preview.portfolio_capacity_remaining_sek.toFixed(0)} SEK kvar
+          </span>
+        )}
+      </div>
+    );
   }
 
   // ─── Tabs config ──────────────────────────────────────────────────────────
@@ -296,6 +380,10 @@ function SignalsContent() {
             {filteredSignals.map((signal) => (
               <div key={signal.id}>
                 <SignalRow signal={signal} onTake={handleTakeSignal} onSkip={handleSkipSignal} />
+                {/* Risk preview strip — shown for pending signals once previews load */}
+                {tab === "pending" && riskPreviews[signal.id] && (
+                  <RiskPreviewStrip preview={riskPreviews[signal.id]} />
+                )}
                 {/* Inline take form */}
                 {takingSignal?.id === signal.id && (
                   <div className="border-b border-[var(--border)]">

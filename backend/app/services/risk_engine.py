@@ -12,6 +12,7 @@ in, or replace the module-level constants with a settings loader.
 from __future__ import annotations
 
 import logging
+import math
 
 log = logging.getLogger(__name__)
 
@@ -336,4 +337,171 @@ def validate_new_position(
         "current_sector_positions":       current_sector_positions,
         "sector_positions_after_entry":   sector_positions_after_entry,
         "max_positions_per_sector":       MAX_POSITIONS_PER_SECTOR,
+    }
+
+
+def preview_signal(
+    *,
+    ticker: str,
+    direction: str,
+    entry_price: float | None,
+    stop_loss: float | None,
+    strategy_family: str | None,
+    sector: str | None,
+    instrument_currency: str,
+    positions: list[dict],          # open/reduced positions from DB
+    strategy_map: dict[str, str],   # {strategy_id → strategy_family}
+    fx_rates: dict[str, float],     # {currency → rate_to_SEK}
+) -> dict:
+    """Compute a pre-trade risk preview for a single signal.
+
+    Answers three questions the trader needs BEFORE placing the order:
+      1. Can this trade be taken at all?  (risk_status)
+      2. How many shares can be bought?   (max_quantity)
+      3. What is the risk per share?      (trade_risk_per_share_sek)
+
+    max_quantity logic — most restrictive of all applicable rules:
+        per-trade rule:    floor(MAX_RISK_PER_TRADE_SEK       / risk_per_share_sek)
+        portfolio rule:    floor(portfolio_capacity_remaining  / risk_per_share_sek)
+        strategy rule:     floor(strategy_capacity_remaining   / risk_per_share_sek)  [if family known]
+        position count:    0 (hard block, not quantity-based)
+        sector count:      0 (hard block, not quantity-based)
+
+    risk_status:
+        "blocked"  — max_quantity = 0 or a hard rule is already violated
+        "limited"  — tradable but a portfolio-level constraint reduces max_quantity
+                     below what the per-trade limit alone would allow
+        "ok"       — only the per-trade limit is binding (no portfolio constraint bites)
+    """
+    from app.services.portfolio import convert_to_base
+
+    blocking: list[str] = []
+    warnings: list[str] = []
+
+    # ── Sector resolution ─────────────────────────────────────────────────────
+    resolved_sector = sector or _lookup_sector(ticker)
+    sector_known    = resolved_sector is not None
+    if not sector_known:
+        warnings.append(f"Sector unknown for {ticker} — sector check skipped")
+
+    # ── Strategy family ───────────────────────────────────────────────────────
+    family_known = strategy_family is not None
+    if not family_known:
+        warnings.append("Strategy family unknown — strategy check skipped")
+
+    # ── Per-share risk in SEK ─────────────────────────────────────────────────
+    risk_per_share_sek: float | None = None
+    if entry_price is not None and stop_loss is not None:
+        raw = (entry_price - stop_loss) if direction == "long" else (stop_loss - entry_price)
+        risk_per_share_native = max(0.0, raw)
+        if risk_per_share_native > 0:
+            converted, unavail = convert_to_base(risk_per_share_native, instrument_currency, fx_rates)
+            if unavail or converted is None:
+                warnings.append(f"FX rate unavailable for {instrument_currency} — quantity limits cannot be computed")
+            else:
+                risk_per_share_sek = converted
+        else:
+            warnings.append("Risk per share is zero or negative — check entry/stop values")
+    else:
+        warnings.append("Entry price or stop loss missing — quantity limits cannot be computed")
+
+    # ── Current portfolio state ───────────────────────────────────────────────
+    active             = [p for p in positions if p.get("status") in ("open", "reduced")]
+    current_open_count = len(active)
+
+    current_portfolio_risk_sek       = sum(_position_risk_sek(p, fx_rates) for p in active)
+    portfolio_capacity_remaining_sek = max(0.0, MAX_TOTAL_PORTFOLIO_RISK_SEK - current_portfolio_risk_sek)
+
+    # ── Strategy family exposure ──────────────────────────────────────────────
+    current_strategy_risk_sek        = None
+    strategy_capacity_remaining_sek  = None
+    if family_known:
+        fam_positions = [
+            p for p in active
+            if _position_strategy_family(p, strategy_map) == strategy_family
+        ]
+        current_strategy_risk_sek       = sum(_position_risk_sek(p, fx_rates) for p in fam_positions)
+        strategy_capacity_remaining_sek = max(0.0, MAX_RISK_PER_STRATEGY_SEK - current_strategy_risk_sek)
+
+    # ── Sector concentration ──────────────────────────────────────────────────
+    current_sector_positions            = None
+    sector_capacity_remaining_positions = None
+    if sector_known:
+        sector_active = [
+            p for p in active
+            if _lookup_sector(p.get("ticker", "")) == resolved_sector
+        ]
+        current_sector_positions            = len(sector_active)
+        sector_capacity_remaining_positions = max(0, MAX_POSITIONS_PER_SECTOR - current_sector_positions)
+
+    # ── Hard blocks (quantity = 0 regardless of risk size) ───────────────────
+    if current_open_count >= MAX_OPEN_POSITIONS:
+        blocking.append(f"Max positions reached ({current_open_count}/{MAX_OPEN_POSITIONS})")
+    if sector_known and sector_capacity_remaining_positions is not None and sector_capacity_remaining_positions <= 0:
+        blocking.append(f"Sector '{resolved_sector}' full ({current_sector_positions}/{MAX_POSITIONS_PER_SECTOR})")
+
+    # ── Max quantity: most restrictive across all applicable rules ────────────
+    max_quantity: int | None = None
+    binding_rule: str | None = None
+
+    if blocking:
+        max_quantity = 0
+    elif risk_per_share_sek is not None and risk_per_share_sek > 0:
+        candidates: list[tuple[str, int]] = []
+
+        # Rule A: per-trade risk cap
+        q_trade = math.floor(MAX_RISK_PER_TRADE_SEK / risk_per_share_sek)
+        candidates.append(("per-trade risk limit", q_trade))
+
+        # Rule B: remaining portfolio capacity
+        q_portfolio = math.floor(portfolio_capacity_remaining_sek / risk_per_share_sek)
+        candidates.append(("portfolio risk capacity", q_portfolio))
+
+        # Rule C: remaining strategy family capacity (if family known)
+        if strategy_capacity_remaining_sek is not None:
+            q_strategy = math.floor(strategy_capacity_remaining_sek / risk_per_share_sek)
+            candidates.append(("strategy family risk capacity", q_strategy))
+
+        min_qty    = min(q for _, q in candidates)
+        max_quantity = max(0, min_qty)
+        binding_rule = next((name for name, q in candidates if q == min_qty), None)
+
+        if max_quantity == 0:
+            blocking.append(f"Risk capacity exhausted ({binding_rule})")
+    # else: max_quantity stays None — no stop/FX, can't compute
+
+    # ── Suggested quantity = max_quantity for v1 ──────────────────────────────
+    # (Future: could be a slightly more conservative integer, e.g. 90% of max)
+    suggested_quantity = max_quantity
+
+    # ── Risk status ───────────────────────────────────────────────────────────
+    if blocking or max_quantity == 0:
+        risk_status = "blocked"
+    elif risk_per_share_sek is None:
+        # No stop/FX — can't assess quantity, but portfolio has capacity
+        risk_status = "ok"   # conservative: open but unknown; warnings surface the gap
+    else:
+        # Compare max_quantity to what per-trade alone would allow
+        q_trade_only = math.floor(MAX_RISK_PER_TRADE_SEK / risk_per_share_sek)
+        risk_status  = "limited" if max_quantity < q_trade_only else "ok"
+
+    log.info(
+        "[risk-engine][preview] %s %s: risk_per_share=%.2f SEK  max_qty=%s  "
+        "status=%s  portfolio_cap=%.0f SEK  binding=%s",
+        direction, ticker,
+        risk_per_share_sek or 0, max_quantity,
+        risk_status, portfolio_capacity_remaining_sek, binding_rule or "-",
+    )
+
+    return {
+        "risk_status":                        risk_status,
+        "max_quantity":                       max_quantity,
+        "suggested_quantity":                 suggested_quantity,
+        "trade_risk_per_share_sek":           round(risk_per_share_sek, 4) if risk_per_share_sek is not None else None,
+        "blocking_reasons":                   blocking,
+        "warnings":                           warnings,
+        "portfolio_risk_sek":                 round(current_portfolio_risk_sek, 2),
+        "portfolio_capacity_remaining_sek":   round(portfolio_capacity_remaining_sek, 2),
+        "strategy_capacity_remaining_sek":    round(strategy_capacity_remaining_sek, 2) if strategy_capacity_remaining_sek is not None else None,
+        "sector_capacity_remaining_positions": sector_capacity_remaining_positions,
     }

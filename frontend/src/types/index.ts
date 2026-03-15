@@ -318,6 +318,35 @@ export interface UpdateSignal {
   take_profit?: number;
 }
 
+export type RiskStatus = "ok" | "limited" | "blocked";
+
+export interface SignalPreviewRequest {
+  signal_id: string;
+  ticker: string;
+  direction: string;
+  entry_price?: number | null;
+  stop_loss?: number | null;
+  market?: string | null;
+  strategy_id?: string | null;
+  strategy_family?: string | null;
+  sector?: string | null;
+  instrument_currency?: string | null;
+}
+
+export interface SignalRiskPreview {
+  signal_id: string;
+  risk_status: RiskStatus;
+  max_quantity: number | null;
+  suggested_quantity: number | null;
+  trade_risk_per_share_sek: number | null;
+  blocking_reasons: string[];
+  warnings: string[];
+  portfolio_risk_sek: number;
+  portfolio_capacity_remaining_sek: number;
+  strategy_capacity_remaining_sek: number | null;
+  sector_capacity_remaining_positions: number | null;
+}
+
 export interface RiskValidationRequest {
   ticker: string;
   direction: string;

@@ -7,13 +7,14 @@ POST /api/v1/risk/validate-entry
     a position is created.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends
+from typing import List
 
 from app.core.supabase import get_supabase
 from app.core.auth import get_current_user
 from app.services.fx import fetch_fx_rates_for_currencies
 from app.services.portfolio import BASE_CURRENCY, get_instrument_currency, normalize_strategy_family
-from app.services.risk_engine import validate_new_position
+from app.services.risk_engine import validate_new_position, preview_signal
 
 router = APIRouter(prefix="/risk", tags=["risk"])
 
@@ -106,3 +107,106 @@ async def validate_entry(
         strategy_map=strategy_map,
         fx_rates=fx_rates,
     )
+
+
+@router.post("/preview-signals-bulk")
+async def preview_signals_bulk(
+    signals_data: List[dict] = Body(...),
+    user: dict = Depends(get_current_user),
+):
+    """Preview risk for a list of pending signals in one call.
+
+    Fetches positions, strategies, and FX rates once, then evaluates each signal.
+    Returns a dict mapping signal_id → preview result.
+
+    Request body: list of objects with:
+        signal_id        str     Required
+        ticker           str     Required
+        direction        str     Required  ("long" | "short")
+        entry_price      float   Optional
+        stop_loss        float   Optional
+        market           str     Optional
+        strategy_id      str     Optional
+        strategy_family  str     Optional  (explicit override)
+        sector           str     Optional  (explicit override)
+        instrument_currency str  Optional
+
+    Response: { signal_id: SignalRiskPreview, ... }
+    """
+    if not signals_data:
+        return {}
+
+    sb = get_supabase()
+
+    # ── Shared data fetched once ──────────────────────────────────────────────
+
+    # Strategies → strategy_map
+    strategies_raw = (
+        sb.table("strategies").select("id, name, strategy_family").execute().data or []
+    )
+    strategy_map: dict[str, str] = {}
+    for s in strategies_raw:
+        fam = s.get("strategy_family") or normalize_strategy_family(s["name"])
+        strategy_map[s["id"]] = fam
+
+    # Current open/reduced positions
+    positions = (
+        sb.table("positions")
+        .select(
+            "id, ticker, direction, status, actual_entry_price, entry_price, "
+            "current_stop_loss, stop_loss, remaining_quantity, quantity, "
+            "instrument_currency, market, entry_context"
+        )
+        .in_("status", ["open", "reduced"])
+        .execute()
+    ).data or []
+
+    # FX rates — union of all signal currencies + existing position currencies
+    def _signal_currency(sig: dict) -> str:
+        return get_instrument_currency({
+            "ticker":              sig.get("ticker", ""),
+            "market":              sig.get("market"),
+            "instrument_currency": sig.get("instrument_currency"),
+        })
+
+    currencies = (
+        {get_instrument_currency(p) for p in positions}
+        | {_signal_currency(s) for s in signals_data}
+    )
+    fx_results = fetch_fx_rates_for_currencies(currencies, to_currency=BASE_CURRENCY)
+    fx_rates   = {c: r.rate for c, r in fx_results.items() if r.rate is not None}
+
+    # ── Evaluate each signal ──────────────────────────────────────────────────
+    result: dict[str, dict] = {}
+
+    for sig in signals_data:
+        signal_id = sig.get("signal_id")
+        if not signal_id:
+            continue
+
+        # Resolve strategy_family: explicit override → lookup by id → None
+        strategy_family: str | None = sig.get("strategy_family") or None
+        if not strategy_family and sig.get("strategy_id"):
+            strategy_family = strategy_map.get(sig["strategy_id"])
+
+        ticker      = (sig.get("ticker") or "").upper()
+        direction   = sig.get("direction", "long")
+        entry_price = float(sig["entry_price"]) if sig.get("entry_price") is not None else None
+        stop_loss   = float(sig["stop_loss"])   if sig.get("stop_loss")   is not None else None
+
+        preview = preview_signal(
+            ticker=ticker,
+            direction=direction,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            strategy_family=strategy_family,
+            sector=sig.get("sector") or None,
+            instrument_currency=_signal_currency(sig),
+            positions=positions,
+            strategy_map=strategy_map,
+            fx_rates=fx_rates,
+        )
+        preview["signal_id"] = signal_id
+        result[signal_id] = preview
+
+    return result

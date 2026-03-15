@@ -9,6 +9,8 @@ import type {
   RiskSummary,
   RiskValidation,
   RiskValidationRequest,
+  SignalRiskPreview,
+  SignalPreviewRequest,
   CreateSignal,
   UpdateSignal,
   TakeSignal,
@@ -64,6 +66,16 @@ export const riskApi = {
     apiFetch<RiskValidation>("/risk/validate-entry", {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+
+  /**
+   * Preview risk for multiple pending signals in one request.
+   * Returns a dict mapping signal_id → SignalRiskPreview.
+   */
+  previewSignalsBulk: (signals: SignalPreviewRequest[]) =>
+    apiFetch<Record<string, SignalRiskPreview>>("/risk/preview-signals-bulk", {
+      method: "POST",
+      body: JSON.stringify(signals),
     }),
 };
 
