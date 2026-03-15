@@ -2,7 +2,7 @@
 
 import AppShell from "@/components/layout/AppShell";
 import { useEffect, useState, useCallback } from "react";
-import { signalsApi, strategiesApi } from "@/lib/api";
+import { signalsApi, strategiesApi, riskApi } from "@/lib/api";
 import { SignalRow } from "@/components/signals/SignalRow";
 import { Card } from "@/components/ui/Card";
 import type { Signal, Strategy, TakeSignal } from "@/types";
@@ -33,6 +33,8 @@ function SignalsContent() {
   const [takingSignal, setTakingSignal] = useState<Signal | null>(null);
   const [entryPrice, setEntryPrice] = useState("");
   const [quantity, setQuantity] = useState("");
+  const [validating, setValidating] = useState(false);
+  const [riskBlock, setRiskBlock] = useState<string[] | null>(null);
 
   // Create signal form
   const [showCreate, setShowCreate] = useState(false);
@@ -83,15 +85,52 @@ function SignalsContent() {
   async function handleTakeSignal(signal: Signal) {
     if (takingSignal?.id === signal.id) {
       if (!entryPrice) return;
+
+      const entryPriceNum = parseFloat(entryPrice);
+      const quantityNum   = quantity ? parseFloat(quantity) : undefined;
+
+      // ── Step 1: Risk validation ────────────────────────────────────────────
+      setValidating(true);
+      setRiskBlock(null);
+      try {
+        const validation = await riskApi.validateEntry({
+          ticker:          signal.ticker,
+          direction:       signal.direction,
+          entry_price:     entryPriceNum,
+          stop_loss:       signal.stop_loss ?? undefined,
+          quantity:        quantityNum,
+          strategy_id:     signal.strategy_id ?? undefined,
+          strategy_family: (signal.strategies as any)?.strategy_family
+                           ?? (signal.strategy as any)?.strategy_family
+                           ?? undefined,
+          market:          signal.market ?? undefined,
+          instrument_currency: signal.instrument_currency ?? undefined,
+        });
+
+        if (!validation.allowed) {
+          setRiskBlock(validation.blocking_reasons);
+          setValidating(false);
+          return; // blocked — do not proceed
+        }
+        // Warnings are non-blocking; proceed silently
+      } catch {
+        // Validation endpoint unreachable — fail open to avoid blocking trades
+        // due to infra issues, but log so it's visible in the console.
+        console.warn("[risk] validation endpoint unreachable — proceeding without check");
+      }
+      setValidating(false);
+
+      // ── Step 2: Create position (original flow) ────────────────────────────
       try {
         const data: TakeSignal = {
-          actual_entry_price: parseFloat(entryPrice),
-          quantity: quantity ? parseFloat(quantity) : undefined,
+          actual_entry_price: entryPriceNum,
+          quantity: quantityNum,
         };
         setSignals((prev) => prev.map((s) => (s.id === signal.id ? { ...s, status: "taken" as const } : s)));
         setTakingSignal(null);
         setEntryPrice("");
         setQuantity("");
+        setRiskBlock(null);
         await signalsApi.take(signal.id, data);
       } catch (err: any) {
         setSignals((prev) => prev.map((s) => (s.id === signal.id ? { ...s, status: "pending" as const } : s)));
@@ -99,6 +138,7 @@ function SignalsContent() {
       }
     } else {
       setTakingSignal(signal);
+      setRiskBlock(null);
       // For leverage signals, pre-fill with instrument_price if available
       if (signal.execution_type === "leverage" && signal.instrument_price) {
         setEntryPrice(signal.instrument_price.toString());
@@ -258,25 +298,43 @@ function SignalsContent() {
                 <SignalRow signal={signal} onTake={handleTakeSignal} onSkip={handleSkipSignal} />
                 {/* Inline take form */}
                 {takingSignal?.id === signal.id && (
-                  <div className="flex items-center gap-[8px] px-[22px] py-[10px] bg-[var(--green4)] border-b border-[var(--border)] flex-wrap">
-                    <span className="font-['DM_Mono',monospace] text-[9px] text-[var(--green)] uppercase tracking-[1px]">
-                      {signal.execution_type === "leverage" ? "Ta leverage-trade:" : "Ta trade:"}
-                    </span>
-                    {signal.execution_type === "leverage" && signal.execution_symbol && (
-                      <span className="font-['DM_Mono',monospace] text-[10px] text-[var(--purple)] bg-[var(--purple2)] px-2 py-0.5 rounded-[3px]">
-                        {signal.execution_symbol}
+                  <div className="border-b border-[var(--border)]">
+                    {/* Input row */}
+                    <div className="flex items-center gap-[8px] px-[22px] py-[10px] bg-[var(--green4)] flex-wrap">
+                      <span className="font-['DM_Mono',monospace] text-[9px] text-[var(--green)] uppercase tracking-[1px]">
+                        {signal.execution_type === "leverage" ? "Ta leverage-trade:" : "Ta trade:"}
                       </span>
+                      {signal.execution_type === "leverage" && signal.execution_symbol && (
+                        <span className="font-['DM_Mono',monospace] text-[10px] text-[var(--purple)] bg-[var(--purple2)] px-2 py-0.5 rounded-[3px]">
+                          {signal.execution_symbol}
+                        </span>
+                      )}
+                      <input type="number" placeholder={signal.execution_type === "leverage" ? "Instrument-pris" : "Entry price"}
+                        value={entryPrice} onChange={(e) => { setEntryPrice(e.target.value); setRiskBlock(null); }}
+                        className="w-32 bg-[var(--surface)] border border-[var(--border2)] rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-['DM_Mono',monospace] text-[var(--ink)] focus:border-[var(--green2)] outline-none"
+                        step="0.01" autoFocus />
+                      <input type="number" placeholder="Antal" value={quantity} onChange={(e) => { setQuantity(e.target.value); setRiskBlock(null); }}
+                        className="w-24 bg-[var(--surface)] border border-[var(--border2)] rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-['DM_Mono',monospace] text-[var(--ink)] outline-none" />
+                      <button onClick={() => handleTakeSignal(signal)} disabled={validating}
+                        className="bg-[var(--green)] text-white font-['DM_Mono',monospace] text-[11px] px-3 py-1 rounded-[var(--r-sm)] hover:bg-[var(--green2)] transition-colors cursor-pointer border-0 disabled:opacity-60">
+                        {validating ? "Kontrollerar..." : "Bekräfta"}
+                      </button>
+                      <button onClick={() => { setTakingSignal(null); setEntryPrice(""); setQuantity(""); setRiskBlock(null); }}
+                        className="text-[var(--ink3)] font-['DM_Mono',monospace] text-[11px] px-3 py-1 rounded-[var(--r-sm)] hover:bg-[var(--cream2)] transition-colors cursor-pointer border border-[var(--border)] bg-transparent">Avbryt</button>
+                    </div>
+                    {/* Risk blocking message */}
+                    {riskBlock && riskBlock.length > 0 && (
+                      <div className="px-[22px] py-[10px] bg-[var(--red2)] border-t border-[#dcc4c4]">
+                        <p className="font-['DM_Mono',monospace] text-[9px] text-[var(--red)] uppercase tracking-[1px] mb-[6px]">
+                          Trade blockerad — portföljriskgränser överskrids
+                        </p>
+                        {riskBlock.map((reason, i) => (
+                          <p key={i} className="font-['DM_Mono',monospace] text-[10.5px] text-[var(--red)] leading-[1.6]">
+                            · {reason}
+                          </p>
+                        ))}
+                      </div>
                     )}
-                    <input type="number" placeholder={signal.execution_type === "leverage" ? "Instrument-pris" : "Entry price"}
-                      value={entryPrice} onChange={(e) => setEntryPrice(e.target.value)}
-                      className="w-32 bg-[var(--surface)] border border-[var(--border2)] rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-['DM_Mono',monospace] text-[var(--ink)] focus:border-[var(--green2)] outline-none"
-                      step="0.01" autoFocus />
-                    <input type="number" placeholder="Antal" value={quantity} onChange={(e) => setQuantity(e.target.value)}
-                      className="w-24 bg-[var(--surface)] border border-[var(--border2)] rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-['DM_Mono',monospace] text-[var(--ink)] outline-none" />
-                    <button onClick={() => handleTakeSignal(signal)}
-                      className="bg-[var(--green)] text-white font-['DM_Mono',monospace] text-[11px] px-3 py-1 rounded-[var(--r-sm)] hover:bg-[var(--green2)] transition-colors cursor-pointer border-0">Bekräfta</button>
-                    <button onClick={() => { setTakingSignal(null); setEntryPrice(""); setQuantity(""); }}
-                      className="text-[var(--ink3)] font-['DM_Mono',monospace] text-[11px] px-3 py-1 rounded-[var(--r-sm)] hover:bg-[var(--cream2)] transition-colors cursor-pointer border border-[var(--border)] bg-transparent">Avbryt</button>
                   </div>
                 )}
               </div>

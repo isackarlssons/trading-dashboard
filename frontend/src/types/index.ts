@@ -318,6 +318,38 @@ export interface UpdateSignal {
   take_profit?: number;
 }
 
+export interface RiskValidationRequest {
+  ticker: string;
+  direction: string;
+  entry_price: number;
+  stop_loss?: number;
+  quantity?: number;
+  strategy_id?: string;
+  strategy_family?: string;
+  sector?: string;
+  instrument_currency?: string;
+  market?: string;
+}
+
+export interface RiskValidation {
+  allowed: boolean;
+  blocking_reasons: string[];
+  warnings: string[];
+  trade_risk_sek: number;
+  current_portfolio_risk_sek: number;
+  portfolio_risk_after_entry_sek: number;
+  current_open_positions: number;
+  max_open_positions: number;
+  max_total_portfolio_risk_sek: number;
+  max_risk_per_trade_sek: number;
+  current_strategy_risk_sek: number | null;
+  strategy_risk_after_entry_sek: number | null;
+  max_risk_per_strategy_sek: number;
+  current_sector_positions: number | null;
+  sector_positions_after_entry: number | null;
+  max_positions_per_sector: number;
+}
+
 export interface UpdatePosition {
   stop_loss?: number;
   current_stop_loss?: number;

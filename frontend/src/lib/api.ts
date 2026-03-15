@@ -7,6 +7,8 @@ import type {
   TradeAnalytics,
   Strategy,
   RiskSummary,
+  RiskValidation,
+  RiskValidationRequest,
   CreateSignal,
   UpdateSignal,
   TakeSignal,
@@ -53,6 +55,17 @@ async function apiFetch<T>(
 
   return response.json();
 }
+
+// ─── Risk ────────────────────────────────────────────────────────────────────
+
+export const riskApi = {
+  /** Validate a proposed new trade against current portfolio risk limits. */
+  validateEntry: (data: RiskValidationRequest) =>
+    apiFetch<RiskValidation>("/risk/validate-entry", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+};
 
 // ─── Strategies ─────────────────────────────────────────────────────────────
 

@@ -231,6 +231,44 @@ function DashboardContent() {
               </div>
             </div>
 
+            {/* Risk capacity overview */}
+            {(() => {
+              const MAX_RISK_SEK = 3000;
+              const MAX_POSITIONS = 5;
+              const totalRisk = riskSummary.total_open_risk_sek ?? riskSummary.total_open_risk;
+              const totalPositions = riskSummary.open_positions_count + riskSummary.reduced_positions_count;
+              const riskPct   = Math.min(100, (totalRisk / MAX_RISK_SEK) * 100);
+              const posPct    = Math.min(100, (totalPositions / MAX_POSITIONS) * 100);
+              const riskColor = riskPct >= 90 ? "var(--red)" : riskPct >= 70 ? "var(--amber)" : "var(--green)";
+              const posColor  = posPct  >= 100 ? "var(--red)" : posPct >= 80 ? "var(--amber)" : "var(--green)";
+              return (
+                <div className="flex gap-6 mb-5 flex-wrap">
+                  <div className="flex-1 min-w-[160px]">
+                    <div className="flex items-center justify-between mb-[4px]">
+                      <span className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px]">Riskkapacitet (SEK)</span>
+                      <span className="font-['DM_Mono',monospace] text-[9px]" style={{ color: riskColor }}>
+                        {totalRisk.toFixed(0)} / {MAX_RISK_SEK}
+                      </span>
+                    </div>
+                    <div className="h-[4px] bg-[var(--cream2)] rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{ width: `${riskPct}%`, backgroundColor: riskColor }} />
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-[140px]">
+                    <div className="flex items-center justify-between mb-[4px]">
+                      <span className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px]">Positionskapacitet</span>
+                      <span className="font-['DM_Mono',monospace] text-[9px]" style={{ color: posColor }}>
+                        {totalPositions} / {MAX_POSITIONS}
+                      </span>
+                    </div>
+                    <div className="h-[4px] bg-[var(--cream2)] rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{ width: `${posPct}%`, backgroundColor: posColor }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Per-position table — Risk and P&L in SEK when available */}
             <div className="border border-[var(--border)] rounded-[var(--r-sm)] overflow-hidden">
               <div className="grid grid-cols-[1fr_50px_70px_70px_80px_90px] font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[0.9px] px-3 py-[6px] bg-[var(--cream)] border-b border-[var(--border)]">
