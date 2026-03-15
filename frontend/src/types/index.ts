@@ -17,6 +17,7 @@ export type ActionExecutionState = "pending" | "acknowledged" | "executed" | "di
 export interface Strategy {
   id: string;
   name: string;
+  strategy_family: string | null;
   description: string | null;
   version: string;
   config: Record<string, unknown> | null;
@@ -112,6 +113,7 @@ export interface Position {
   ticker: string;
   direction: SignalDirection;
   market: string | null;
+  instrument_currency: string | null;
   status: PositionStatus;
   // New canonical fields
   planned_entry_price: number | null;
@@ -179,19 +181,29 @@ export interface PositionRisk {
   ticker: string;
   direction: SignalDirection;
   status: PositionStatus;
+  instrument_currency: string | null;
+  fx_rate_used: number | null;
   current_price: number | null;
   current_stop_loss: number | null;
   actual_entry_price: number | null;
   remaining_quantity: number | null;
   unrealized_pnl: number | null;
+  unrealized_pnl_sek: number | null;
   risk_to_stop: number | null;
+  risk_to_stop_sek: number | null;
   price_unavailable: boolean;
 }
 
 export interface RiskSummary {
+  base_currency: string;
+  // Native totals (backward compat)
   total_open_risk: number;
   total_unrealized_pnl: number;
   max_downside_to_stops: number;
+  // SEK totals (primary portfolio figures)
+  total_open_risk_sek: number;
+  total_unrealized_pnl_sek: number;
+  fx_incomplete: boolean;
   open_positions_count: number;
   reduced_positions_count: number;
   per_position: PositionRisk[];
@@ -204,6 +216,7 @@ export interface PerTradeAnalytics {
   ticker: string;
   direction: SignalDirection;
   strategy_name: string | null;
+  strategy_family: string | null;
   regime_at_entry: string | null;
   pnl: number | null;
   pnl_percent: number | null;
@@ -233,6 +246,7 @@ export interface TradeAnalytics {
   max_drawdown_pct: number | null;
   avg_holding_days: number | null;
   by_strategy: Record<string, BreakdownGroup>;
+  by_strategy_family: Record<string, BreakdownGroup>;
   by_regime: Record<string, BreakdownGroup>;
   by_exit_reason: Record<string, BreakdownGroup>;
   per_trade: PerTradeAnalytics[];

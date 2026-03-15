@@ -4,6 +4,7 @@ from datetime import datetime
 
 from app.core.supabase import get_supabase
 from app.core.auth import get_current_user
+from app.services.portfolio import get_instrument_currency
 
 router = APIRouter(prefix="/signals", tags=["signals"])
 
@@ -157,6 +158,13 @@ async def take_signal(
     atr_at_entry = sig_meta.get("atr")
     regime_at_entry = sig_meta.get("regime")
 
+    # Instrument currency: explicit on signal/data, else derive from market
+    instr_currency = (
+        data.get("instrument_currency")
+        or signal.get("instrument_currency")
+        or get_instrument_currency(signal)
+    )
+
     # Create position with both legacy and new field names for full compatibility
     position_data = {
         "signal_id": signal["id"],
@@ -178,6 +186,7 @@ async def take_signal(
         "execution_symbol": signal.get("execution_symbol"),
         "execution_isin": signal.get("execution_isin"),
         "instrument_price": data.get("instrument_price") or signal.get("instrument_price"),
+        "instrument_currency": instr_currency,
         "opened_at": now,
         "status": "open",
         "notes": data.get("notes"),

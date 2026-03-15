@@ -4,6 +4,7 @@ from datetime import datetime
 
 from app.core.supabase import get_supabase
 from app.core.auth import get_current_user
+from app.services.portfolio import normalize_strategy_family
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
@@ -181,11 +182,13 @@ async def get_trade_analytics(
             for r in rows:
                 pos_map[r["id"]] = r
 
-    # ── Fetch strategy names ───────────────────────────────────────────────────
-    strats: dict = {
-        s["id"]: s["name"]
-        for s in (sb.table("strategies").select("id, name").execute().data or [])
-    }
+    # ── Fetch strategy names + families ──────────────────────────────────────
+    strats:        dict = {}  # id → name
+    strat_families: dict = {}  # id → family
+    for s in (sb.table("strategies").select("id, name, strategy_family").execute().data or []):
+        strats[s["id"]] = s["name"]
+        # Prefer stored family; fall back to runtime normalization
+        strat_families[s["id"]] = s.get("strategy_family") or normalize_strategy_family(s["name"])
 
     # ── Partial exit flags per position ───────────────────────────────────────
     partial_positions: set = set()
@@ -227,9 +230,10 @@ async def get_trade_analytics(
             raw_r = (exit_p - entry) / irps if direction == "long" else (entry - exit_p) / irps
             r_multiple = round(raw_r, 3)
 
-        # Strategy name from entry_context → strategy_id
-        strategy_id = entry_ctx.get("strategy_id")
-        strategy_name = strats.get(strategy_id) if strategy_id else None
+        # Strategy name + family from entry_context → strategy_id
+        strategy_id    = entry_ctx.get("strategy_id")
+        strategy_name  = strats.get(strategy_id)  if strategy_id else None
+        strategy_family = strat_families.get(strategy_id) if strategy_id else None
 
         # Regime
         regime = pos.get("regime_at_entry")
@@ -251,6 +255,7 @@ async def get_trade_analytics(
             "ticker": t["ticker"],
             "direction": direction,
             "strategy_name": strategy_name,
+            "strategy_family": strategy_family,
             "regime_at_entry": regime,
             "pnl": t.get("pnl"),
             "pnl_percent": t.get("pnl_percent"),
@@ -297,10 +302,11 @@ async def get_trade_analytics(
         "profit_factor":    profit_factor,
         "max_drawdown_pct": _compute_max_drawdown(pnl_pcts),
         "avg_holding_days": avg_holding_days,
-        "by_strategy":      _group_by(per_trade, "strategy_name"),
-        "by_regime":        _group_by(per_trade, "regime_at_entry"),
-        "by_exit_reason":   _group_by(per_trade, "exit_reason"),
-        "per_trade":        per_trade,
+        "by_strategy":        _group_by(per_trade, "strategy_name"),
+        "by_strategy_family": _group_by(per_trade, "strategy_family"),
+        "by_regime":          _group_by(per_trade, "regime_at_entry"),
+        "by_exit_reason":     _group_by(per_trade, "exit_reason"),
+        "per_trade":          per_trade,
     }
 
 

@@ -6,6 +6,8 @@ import logging
 
 from app.core.supabase import get_supabase
 from app.core.auth import get_current_user
+from app.services.fx import fetch_fx_rates_for_currencies
+from app.services.portfolio import BASE_CURRENCY, get_instrument_currency, convert_to_base
 
 log = logging.getLogger(__name__)
 
@@ -107,9 +109,22 @@ async def risk_summary(
             prices[ticker] = None
             log.info("[risk-summary] %s: no snapshot in market_snapshots — unavailable", ticker)
 
+    # ── FX rates for SEK conversion (pre-fetch once for all positions) ──────
+    unique_currencies = {get_instrument_currency(p) for p in positions}
+    fx_results = fetch_fx_rates_for_currencies(unique_currencies, to_currency=BASE_CURRENCY)
+    # Build a simple currency → rate dict for convert_to_base()
+    fx_rates = {c: r.rate for c, r in fx_results.items() if r.rate is not None}
+    fx_warnings = [r.warning for r in fx_results.values() if r.warning]
+    if fx_warnings:
+        for w in fx_warnings:
+            log.warning("[risk-summary] FX: %s", w)
+
     per_position = []
-    total_risk = 0.0
-    total_unrealized_pnl = 0.0
+    total_risk_sek = 0.0
+    total_unrealized_pnl_sek = 0.0
+    total_risk_native = 0.0
+    total_unrealized_pnl_native = 0.0
+    fx_incomplete = False
     open_count = 0
     reduced_count = 0
 
@@ -125,41 +140,77 @@ async def risk_summary(
         direction = pos["direction"]
         current_price = prices.get(pos["ticker"])
 
-        # Risk to stop — always computable from stored data
+        # Instrument currency for this position
+        instr_currency = get_instrument_currency(pos)
+        fx_result = fx_results.get(instr_currency)
+        fx_rate = fx_result.rate if fx_result else None
+
+        # Risk to stop — always computable from stored data (in instrument currency)
         risk_to_stop = None
+        risk_to_stop_sek = None
         if entry and sl and qty:
             raw = (entry - sl) * qty if direction == "long" else (sl - entry) * qty
             risk_to_stop = round(max(0.0, raw), 2)
-            total_risk += risk_to_stop
+            total_risk_native += risk_to_stop
+            converted, unavail = convert_to_base(risk_to_stop, instr_currency, fx_rates)
+            if not unavail and converted is not None:
+                risk_to_stop_sek = converted
+                total_risk_sek += converted
+            else:
+                fx_incomplete = True
 
-        # Unrealized PnL — needs live price
+        # Unrealized PnL — needs live price (in instrument currency)
         unrealized_pnl = None
+        unrealized_pnl_sek = None
         if current_price and entry and qty:
             raw_pnl = (current_price - entry) * qty if direction == "long" else (entry - current_price) * qty
             unrealized_pnl = round(raw_pnl, 2)
-            total_unrealized_pnl += unrealized_pnl
+            total_unrealized_pnl_native += unrealized_pnl
+            converted, unavail = convert_to_base(unrealized_pnl, instr_currency, fx_rates)
+            if not unavail and converted is not None:
+                unrealized_pnl_sek = converted
+                total_unrealized_pnl_sek += converted
+            else:
+                fx_incomplete = True
+
+        log.info(
+            "[risk-summary] %s: currency=%s fx=%.4f risk=%s risk_sek=%s upnl=%s upnl_sek=%s",
+            pos["ticker"], instr_currency, fx_rate or 0,
+            risk_to_stop, risk_to_stop_sek,
+            unrealized_pnl, unrealized_pnl_sek,
+        )
 
         per_position.append({
-            "position_id": pos["id"],
-            "ticker": pos["ticker"],
-            "direction": direction,
-            "status": pos["status"],
-            "current_price": current_price,
+            "position_id":       pos["id"],
+            "ticker":            pos["ticker"],
+            "direction":         direction,
+            "status":            pos["status"],
+            "instrument_currency": instr_currency,
+            "fx_rate_used":      fx_rate,
+            "current_price":     current_price,
             "current_stop_loss": sl,
             "actual_entry_price": entry,
             "remaining_quantity": qty,
-            "unrealized_pnl": unrealized_pnl,
-            "risk_to_stop": risk_to_stop,
+            "unrealized_pnl":    unrealized_pnl,
+            "unrealized_pnl_sek": unrealized_pnl_sek,
+            "risk_to_stop":      risk_to_stop,
+            "risk_to_stop_sek":  risk_to_stop_sek,
             "price_unavailable": current_price is None,
         })
 
     return {
-        "total_open_risk": round(total_risk, 2),
-        "total_unrealized_pnl": round(total_unrealized_pnl, 2),
-        "max_downside_to_stops": round(total_risk, 2),
-        "open_positions_count": open_count,
-        "reduced_positions_count": reduced_count,
-        "per_position": per_position,
+        "base_currency":             BASE_CURRENCY,
+        # Native (instrument-currency) totals — kept for backward compat
+        "total_open_risk":           round(total_risk_native, 2),
+        "total_unrealized_pnl":      round(total_unrealized_pnl_native, 2),
+        "max_downside_to_stops":     round(total_risk_native, 2),
+        # SEK totals — primary portfolio-level figures
+        "total_open_risk_sek":       round(total_risk_sek, 2),
+        "total_unrealized_pnl_sek":  round(total_unrealized_pnl_sek, 2),
+        "fx_incomplete":             fx_incomplete,
+        "open_positions_count":      open_count,
+        "reduced_positions_count":   reduced_count,
+        "per_position":              per_position,
     }
 
 
@@ -236,6 +287,13 @@ async def create_position_from_signal(
 
     sig_meta = signal.get("metadata") or {}
 
+    # Instrument currency: explicit on signal/data, else derive from market
+    instr_currency = (
+        data.get("instrument_currency")
+        or signal.get("instrument_currency")
+        or get_instrument_currency(signal)
+    )
+
     position_data = {
         "signal_id": signal["id"],
         "ticker": signal["ticker"],
@@ -256,6 +314,7 @@ async def create_position_from_signal(
         "execution_symbol": signal.get("execution_symbol"),
         "execution_isin": signal.get("execution_isin"),
         "instrument_price": signal.get("instrument_price"),
+        "instrument_currency": instr_currency,
         "notes": data.get("notes"),
         "opened_at": now,
         "status": "open",
@@ -293,6 +352,7 @@ async def update_position(
     allowed_fields = {
         "stop_loss", "current_stop_loss", "take_profit",
         "notes", "remaining_quantity", "quantity", "avg_entry_price",
+        "instrument_currency",
         # Smart exit context — written by bot on each run
         "highest_price_seen", "lowest_price_seen",
         "initial_stop_loss", "initial_risk_per_share",

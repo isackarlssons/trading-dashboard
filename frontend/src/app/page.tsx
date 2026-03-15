@@ -181,19 +181,31 @@ function DashboardContent() {
               Risk Monitor
             </h2>
 
-            {/* Summary row */}
+            {/* Summary row — SEK is the base currency; native totals shown as fallback */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-5">
               <div>
-                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">Total riskexponering</p>
+                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">
+                  Total risk{riskSummary.total_open_risk_sek != null ? " (SEK)" : ""}
+                </p>
                 <p className="font-['Fraunces'] text-[22px] font-bold" style={{ color: "var(--red)" }}>
-                  {riskSummary.total_open_risk > 0 ? `-${riskSummary.total_open_risk.toFixed(2)}` : "0.00"}
+                  {(() => {
+                    const v = riskSummary.total_open_risk_sek ?? riskSummary.total_open_risk;
+                    return v > 0 ? `-${v.toFixed(0)}` : "0";
+                  })()}
                 </p>
               </div>
               <div>
-                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">Orealiserad P&L</p>
-                <p className="font-['Fraunces'] text-[22px] font-bold" style={{ color: riskSummary.total_unrealized_pnl >= 0 ? "var(--green)" : "var(--red)" }}>
-                  {riskSummary.total_unrealized_pnl >= 0 ? "+" : ""}{riskSummary.total_unrealized_pnl.toFixed(2)}
-                  {riskSummary.per_position.some(p => p.price_unavailable) && (
+                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">
+                  Orealiserad P&L{riskSummary.total_unrealized_pnl_sek != null ? " (SEK)" : ""}
+                </p>
+                <p className="font-['Fraunces'] text-[22px] font-bold" style={{
+                  color: (riskSummary.total_unrealized_pnl_sek ?? riskSummary.total_unrealized_pnl) >= 0 ? "var(--green)" : "var(--red)"
+                }}>
+                  {(() => {
+                    const v = riskSummary.total_unrealized_pnl_sek ?? riskSummary.total_unrealized_pnl;
+                    return `${v >= 0 ? "+" : ""}${v.toFixed(0)}`;
+                  })()}
+                  {(riskSummary.per_position.some(p => p.price_unavailable) || riskSummary.fx_incomplete) && (
                     <span className="font-['DM_Mono',monospace] text-[9px] text-[var(--ink4)] ml-1">*</span>
                   )}
                 </p>
@@ -207,52 +219,69 @@ function DashboardContent() {
                 </p>
               </div>
               <div>
-                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">Max nedsida (stops)</p>
+                <p className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[1px] mb-1">
+                  Max nedsida{riskSummary.total_open_risk_sek != null ? " (SEK)" : ""}
+                </p>
                 <p className="font-['Fraunces'] text-[22px] font-bold" style={{ color: "var(--red)" }}>
-                  {riskSummary.max_downside_to_stops > 0 ? `-${riskSummary.max_downside_to_stops.toFixed(2)}` : "0.00"}
+                  {(() => {
+                    const v = riskSummary.total_open_risk_sek ?? riskSummary.max_downside_to_stops;
+                    return v > 0 ? `-${v.toFixed(0)}` : "0";
+                  })()}
                 </p>
               </div>
             </div>
 
-            {/* Per-position table */}
+            {/* Per-position table — Risk and P&L in SEK when available */}
             <div className="border border-[var(--border)] rounded-[var(--r-sm)] overflow-hidden">
-              <div className="grid grid-cols-[1fr_60px_70px_80px_80px_80px] font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[0.9px] px-3 py-[6px] bg-[var(--cream)] border-b border-[var(--border)]">
+              <div className="grid grid-cols-[1fr_50px_70px_70px_80px_90px] font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)] uppercase tracking-[0.9px] px-3 py-[6px] bg-[var(--cream)] border-b border-[var(--border)]">
                 <span>Ticker</span>
                 <span>Dir</span>
                 <span>Entry</span>
                 <span>SL</span>
-                <span className="text-right">Risk</span>
-                <span className="text-right">P&L</span>
+                <span className="text-right">Risk SEK</span>
+                <span className="text-right">P&L SEK</span>
               </div>
-              {riskSummary.per_position.map((p) => (
-                <div key={p.position_id} className="grid grid-cols-[1fr_60px_70px_80px_80px_80px] items-center px-3 py-[8px] border-b border-[var(--border)] last:border-0 hover:bg-[var(--cream)] transition-colors">
-                  <div className="flex items-center gap-[6px]">
-                    <span className="font-['Fraunces'] font-bold text-[13px] text-[var(--ink)]">{p.ticker}</span>
-                    {p.status === "reduced" && (
-                      <span className="font-['DM_Mono',monospace] text-[8px] text-[var(--amber)] border border-[var(--amber)] px-[4px] py-[1px] rounded-[2px]">RED</span>
-                    )}
+              {riskSummary.per_position.map((p) => {
+                const riskVal    = p.risk_to_stop_sek ?? p.risk_to_stop;
+                const pnlVal     = p.unrealized_pnl_sek ?? p.unrealized_pnl;
+                const pnlIsSek   = p.unrealized_pnl_sek != null;
+                return (
+                  <div key={p.position_id} className="grid grid-cols-[1fr_50px_70px_70px_80px_90px] items-center px-3 py-[8px] border-b border-[var(--border)] last:border-0 hover:bg-[var(--cream)] transition-colors">
+                    <div className="flex items-center gap-[6px]">
+                      <span className="font-['Fraunces'] font-bold text-[13px] text-[var(--ink)]">{p.ticker}</span>
+                      {p.instrument_currency && p.instrument_currency !== "SEK" && (
+                        <span className="font-['DM_Mono',monospace] text-[8px] text-[var(--ink4)]">{p.instrument_currency}</span>
+                      )}
+                      {p.status === "reduced" && (
+                        <span className="font-['DM_Mono',monospace] text-[8px] text-[var(--amber)] border border-[var(--amber)] px-[4px] py-[1px] rounded-[2px]">RED</span>
+                      )}
+                    </div>
+                    <Badge variant={p.direction}>{p.direction.toUpperCase()}</Badge>
+                    <span className="font-['DM_Mono',monospace] text-[11px] text-[var(--ink3)]">
+                      {p.actual_entry_price?.toFixed(2) ?? "-"}
+                    </span>
+                    <span className="font-['DM_Mono',monospace] text-[11px]" style={{ color: "var(--red)" }}>
+                      {p.current_stop_loss?.toFixed(2) ?? "-"}
+                    </span>
+                    <span className="font-['DM_Mono',monospace] text-[11px] text-right" style={{ color: "var(--red)" }}>
+                      {riskVal != null ? `-${riskVal.toFixed(0)}` : "-"}
+                    </span>
+                    <span className="font-['DM_Mono',monospace] text-[11px] text-right" style={{
+                      color: p.price_unavailable ? "var(--ink4)" : (pnlVal ?? 0) >= 0 ? "var(--green)" : "var(--red)"
+                    }}>
+                      {p.price_unavailable
+                        ? "N/A"
+                        : pnlVal != null
+                          ? `${pnlVal >= 0 ? "+" : ""}${pnlIsSek ? pnlVal.toFixed(0) : pnlVal.toFixed(2)}`
+                          : "-"}
+                    </span>
                   </div>
-                  <Badge variant={p.direction}>{p.direction.toUpperCase()}</Badge>
-                  <span className="font-['DM_Mono',monospace] text-[11px] text-[var(--ink3)]">
-                    {p.actual_entry_price?.toFixed(2) ?? "-"}
-                  </span>
-                  <span className="font-['DM_Mono',monospace] text-[11px]" style={{ color: "var(--red)" }}>
-                    {p.current_stop_loss?.toFixed(2) ?? "-"}
-                  </span>
-                  <span className="font-['DM_Mono',monospace] text-[11px] text-right" style={{ color: "var(--red)" }}>
-                    {p.risk_to_stop != null ? `-${p.risk_to_stop.toFixed(2)}` : "-"}
-                  </span>
-                  <span className="font-['DM_Mono',monospace] text-[11px] text-right" style={{
-                    color: p.price_unavailable ? "var(--ink4)" : (p.unrealized_pnl ?? 0) >= 0 ? "var(--green)" : "var(--red)"
-                  }}>
-                    {p.price_unavailable ? "N/A" : p.unrealized_pnl != null ? `${p.unrealized_pnl >= 0 ? "+" : ""}${p.unrealized_pnl.toFixed(2)}` : "-"}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
-            {riskSummary.per_position.some(p => p.price_unavailable) && (
+            {(riskSummary.per_position.some(p => p.price_unavailable) || riskSummary.fx_incomplete) && (
               <p className="font-['DM_Mono',monospace] text-[9px] text-[var(--ink4)] mt-2">
-                * Livepris ej tillgängligt för vissa positioner — orealiserad P&L är partiell
+                * Basvaluta SEK — partiellt otillgängligt (livepris eller FX-kurs saknas för vissa positioner)
               </p>
             )}
           </div>

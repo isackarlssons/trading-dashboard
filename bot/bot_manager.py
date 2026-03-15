@@ -433,12 +433,38 @@ def evaluate_position(position: dict, price: float) -> list[dict]:
     return actions
 
 
+# ─── FX snapshots ────────────────────────────────────────────────────────────
+
+# Pairs the bot will refresh on every run so the backend can do SEK conversion
+# without calling Yahoo directly (avoids Railway rate-limit errors).
+_FX_PAIRS: list[str] = ["USDSEK=X", "EURSEK=X", "NOKSEK=X", "DKKSEK=X"]
+
+
+def _write_fx_snapshots() -> None:
+    """Fetch current FX rates and write them to market_snapshots."""
+    for pair in _FX_PAIRS:
+        rate = get_current_price(pair)
+        if rate is None:
+            log.warning(f"  [FX] No rate for {pair}")
+            continue
+        try:
+            api_post("/market-snapshots/", {"ticker": pair, "price": rate})
+            log.debug(f"  [FX] Wrote {pair}: {rate:.4f}")
+        except requests.HTTPError as e:
+            log.warning(f"  [FX] Failed to write {pair}: {e.response.text}")
+        except Exception as e:
+            log.warning(f"  [FX] Failed to write {pair}: {e}")
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def run() -> None:
     log.info("Fetching open positions…")
     positions = api_get("/positions/open")
     log.info(f"Found {len(positions)} open/reduced position(s)")
+
+    # Write FX rates first — backend risk-summary reads these for SEK conversion
+    _write_fx_snapshots()
 
     for pos in positions:
         ticker = pos["ticker"]
