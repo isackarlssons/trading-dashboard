@@ -172,6 +172,8 @@ function AnalyticsSection({ a }: { a: TradeAnalytics }) {
 
   const hasStrategies = Object.keys(a.by_strategy).length > 0;
   const hasRegimes    = Object.keys(a.by_regime).filter(k => k !== "Unknown").length > 0;
+  const hasExitReasons = Object.keys(a.by_exit_reason || {}).filter(k => k !== "Unknown").length > 0;
+  const hasScoreBuckets = Object.keys(a.by_score_bucket || {}).filter(k => k !== "Unknown").length > 0;
 
   return (
     <div className="space-y-3">
@@ -193,7 +195,7 @@ function AnalyticsSection({ a }: { a: TradeAnalytics }) {
         <MiniStat label="Snitt Dagar" value={fmt(a.avg_holding_days, 1)} />
       </div>
 
-      {/* Breakdown tables */}
+      {/* Strategy & Regime breakdown */}
       {(hasStrategies || hasRegimes) && (
         <div className={`grid gap-3 ${hasStrategies && hasRegimes ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"}`}>
           {hasStrategies && (
@@ -204,12 +206,42 @@ function AnalyticsSection({ a }: { a: TradeAnalytics }) {
           )}
         </div>
       )}
+
+      {/* Exit & Score analytics */}
+      {(hasExitReasons || hasScoreBuckets) && (
+        <>
+          <h2 className="font-['DM_Mono',monospace] text-[9px] text-[var(--ink4)] uppercase tracking-[1.4px] pt-1">
+            Exit Attribution & Signal Kvalitet
+          </h2>
+          <div className={`grid gap-3 ${hasExitReasons && hasScoreBuckets ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"}`}>
+            {hasExitReasons && (
+              <BreakdownTable title="Per Exit-orsak" data={a.by_exit_reason} showPnlPct />
+            )}
+            {hasScoreBuckets && (
+              <BreakdownTable title="Per Signal-score (bucket)" data={a.by_score_bucket} showPnlPct sortByKey />
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-function BreakdownTable({ title, data }: { title: string; data: Record<string, BreakdownGroup> }) {
-  const rows = Object.entries(data).sort((a, b) => b[1].trades - a[1].trades);
+function BreakdownTable({
+  title,
+  data,
+  showPnlPct = false,
+  sortByKey = false,
+}: {
+  title: string;
+  data: Record<string, BreakdownGroup>;
+  showPnlPct?: boolean;
+  sortByKey?: boolean;
+}) {
+  const rows = Object.entries(data).sort((a, b) =>
+    sortByKey ? a[0].localeCompare(b[0]) : b[1].trades - a[1].trades
+  );
+  const headers = ["Namn", "Trades", "Win %", "Avg R", ...(showPnlPct ? ["Avg P&L %"] : [])];
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded-[var(--r)] shadow-[var(--shadow)] overflow-hidden">
       <div className="px-[14px] py-[8px] border-b border-[var(--border)] bg-[var(--cream)]">
@@ -218,7 +250,7 @@ function BreakdownTable({ title, data }: { title: string; data: Record<string, B
       <table className="w-full">
         <thead>
           <tr className="border-b border-[var(--border)]">
-            {["Namn", "Trades", "Win %", "Avg R"].map(h => (
+            {headers.map(h => (
               <th key={h} className="text-left py-[7px] px-[12px] font-['DM_Mono',monospace] text-[7.5px] text-[var(--ink4)] uppercase tracking-[1px] first:pl-[14px] last:pr-[14px]">{h}</th>
             ))}
           </tr>
@@ -232,10 +264,16 @@ function BreakdownTable({ title, data }: { title: string; data: Record<string, B
                 style={{ color: g.win_rate >= 50 ? "var(--green)" : "var(--red)" }}>
                 {g.win_rate.toFixed(1)}%
               </td>
-              <td className="py-[8px] px-[12px] pr-[14px] font-['DM_Mono',monospace] text-[11px]"
+              <td className="py-[8px] px-[12px] font-['DM_Mono',monospace] text-[11px]"
                 style={{ color: g.avg_r != null ? (g.avg_r >= 0 ? "var(--green)" : "var(--red)") : "var(--ink4)" }}>
                 {g.avg_r != null ? `${g.avg_r > 0 ? "+" : ""}${g.avg_r.toFixed(2)}R` : "N/A"}
               </td>
+              {showPnlPct && (
+                <td className="py-[8px] px-[12px] pr-[14px] font-['DM_Mono',monospace] text-[11px]"
+                  style={{ color: g.avg_pnl_pct != null ? (g.avg_pnl_pct >= 0 ? "var(--green)" : "var(--red)") : "var(--ink4)" }}>
+                  {g.avg_pnl_pct != null ? `${g.avg_pnl_pct > 0 ? "+" : ""}${g.avg_pnl_pct.toFixed(2)}%` : "N/A"}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

@@ -8,6 +8,7 @@ from app.core.supabase import get_supabase
 from app.core.auth import get_current_user
 from app.services.fx import fetch_fx_rates_for_currencies
 from app.services.portfolio import BASE_CURRENCY, get_instrument_currency, convert_to_base
+from app.services.exit_attribution import infer_exit_reason
 
 log = logging.getLogger(__name__)
 
@@ -486,6 +487,15 @@ async def partial_close_position(
 
         result_type = "breakeven" if abs(overall_pnl_pct) < 0.1 else ("win" if overall_pnl_pct > 0 else "loss")
 
+        # Fetch position actions for exit attribution
+        all_actions = (
+            sb.table("position_actions")
+            .select("*")
+            .eq("position_id", position_id)
+            .execute()
+        ).data or []
+        exit_reason = infer_exit_reason(position, exit_price, all_partials, all_actions)
+
         trade_data = {
             "position_id": position_id,
             "ticker": position["ticker"],
@@ -500,6 +510,7 @@ async def partial_close_position(
             "notes": data.get("notes") or position.get("notes"),
             "opened_at": position["opened_at"],
             "closed_at": now,
+            "exit_reason": exit_reason,
         }
         sb.table("trades").insert(trade_data).execute()
     else:
@@ -594,6 +605,15 @@ async def close_position(
         "remaining_quantity": 0,
     }).eq("id", position_id).execute()
 
+    # Fetch position actions for exit attribution
+    all_actions = (
+        sb.table("position_actions")
+        .select("*")
+        .eq("position_id", position_id)
+        .execute()
+    ).data or []
+    exit_reason = infer_exit_reason(position, exit_price, prior_partials, all_actions)
+
     trade_data = {
         "position_id": position["id"],
         "ticker": position["ticker"],
@@ -608,6 +628,7 @@ async def close_position(
         "notes": data.get("notes") or position.get("notes"),
         "opened_at": position["opened_at"],
         "closed_at": now,
+        "exit_reason": exit_reason,
     }
     trade_result = sb.table("trades").insert(trade_data).execute()
 

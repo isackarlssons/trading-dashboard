@@ -155,6 +155,7 @@ export interface Trade {
   result: TradeResult;
   fees: number;
   notes: string | null;
+  exit_reason: string | null;
   opened_at: string;
   closed_at: string;
   created_at: string;
@@ -222,6 +223,7 @@ export interface PerTradeAnalytics {
   pnl_percent: number | null;
   r_multiple: number | null;
   exit_reason: string | null;
+  score_bucket: string | null;
   holding_days: number | null;
   partial_exit_used: boolean;
   result: TradeResult;
@@ -233,6 +235,7 @@ export interface BreakdownGroup {
   losses: number;
   win_rate: number;
   avg_r: number | null;
+  avg_pnl_pct?: number | null;
 }
 
 export interface TradeAnalytics {
@@ -249,6 +252,7 @@ export interface TradeAnalytics {
   by_strategy_family: Record<string, BreakdownGroup>;
   by_regime: Record<string, BreakdownGroup>;
   by_exit_reason: Record<string, BreakdownGroup>;
+  by_score_bucket: Record<string, BreakdownGroup>;
   per_trade: PerTradeAnalytics[];
 }
 

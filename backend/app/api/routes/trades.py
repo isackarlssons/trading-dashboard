@@ -17,7 +17,8 @@ def _empty_analytics() -> dict:
         "avg_r": None, "avg_win_r": None, "avg_loss_r": None,
         "profit_factor": None, "max_drawdown_pct": None,
         "avg_holding_days": None,
-        "by_strategy": {}, "by_regime": {}, "by_exit_reason": {},
+        "by_strategy": {}, "by_strategy_family": {}, "by_regime": {},
+        "by_exit_reason": {}, "by_score_bucket": {},
         "per_trade": [],
     }
 
@@ -29,7 +30,8 @@ def _group_by(trades: list, key: str) -> dict:
         k = t.get(key) or "Unknown"
         if k not in acc:
             acc[k] = {"trades": 0, "wins": 0, "losses": 0,
-                      "win_rate": 0.0, "avg_r": None, "_rs": []}
+                      "win_rate": 0.0, "avg_r": None, "avg_pnl_pct": None,
+                      "_rs": [], "_pnls": []}
         g = acc[k]
         g["trades"] += 1
         if t["result"] == "win":
@@ -38,14 +40,36 @@ def _group_by(trades: list, key: str) -> dict:
             g["losses"] += 1
         if t["r_multiple"] is not None:
             g["_rs"].append(t["r_multiple"])
+        if t.get("pnl_percent") is not None:
+            g["_pnls"].append(t["pnl_percent"])
 
     result = {}
     for k, g in acc.items():
-        rs = g.pop("_rs")
-        g["win_rate"] = round(g["wins"] / g["trades"] * 100, 1)
-        g["avg_r"] = round(sum(rs) / len(rs), 3) if rs else None
+        rs   = g.pop("_rs")
+        pnls = g.pop("_pnls")
+        g["win_rate"]    = round(g["wins"] / g["trades"] * 100, 1)
+        g["avg_r"]       = round(sum(rs) / len(rs), 3) if rs else None
+        g["avg_pnl_pct"] = round(sum(pnls) / len(pnls), 2) if pnls else None
         result[k] = g
     return result
+
+
+def _score_bucket(confidence: float | None) -> str | None:
+    """Map a raw confidence value (0–1.0 or 0–100) to a display bucket string."""
+    if confidence is None:
+        return None
+    # Normalize: if stored as 0–1 fraction convert to 0–100
+    score = confidence * 100 if confidence <= 1.0 else confidence
+    if score <= 20:
+        return "0-20"
+    elif score <= 40:
+        return "21-40"
+    elif score <= 60:
+        return "41-60"
+    elif score <= 80:
+        return "61-80"
+    else:
+        return "81-100"
 
 
 def _compute_max_drawdown(pnl_percents: list) -> float | None:
@@ -174,13 +198,33 @@ async def get_trade_analytics(
             chunk = position_ids[i : i + chunk_size]
             rows = (
                 sb.table("positions")
-                .select("id, initial_risk_per_share, initial_stop_loss, stop_loss, "
+                .select("id, signal_id, initial_risk_per_share, initial_stop_loss, stop_loss, "
                         "actual_entry_price, entry_price, regime_at_entry, entry_context")
                 .in_("id", chunk)
                 .execute()
             ).data or []
             for r in rows:
                 pos_map[r["id"]] = r
+
+    # ── Fetch signal confidence for score-bucket breakdown ────────────────────
+    signal_score_map: dict = {}  # signal_id → confidence
+    signal_ids = list({
+        pos.get("signal_id")
+        for pos in pos_map.values()
+        if pos.get("signal_id")
+    })
+    if signal_ids:
+        chunk_size = 100
+        for i in range(0, len(signal_ids), chunk_size):
+            chunk = signal_ids[i : i + chunk_size]
+            rows = (
+                sb.table("signals")
+                .select("id, confidence")
+                .in_("id", chunk)
+                .execute()
+            ).data or []
+            for r in rows:
+                signal_score_map[r["id"]] = r.get("confidence")
 
     # ── Fetch strategy names + families ──────────────────────────────────────
     strats:        dict = {}  # id → name
@@ -247,8 +291,13 @@ async def get_trade_analytics(
         except Exception:
             pass
 
-        # Exit reason — use trade notes as proxy (dedicated field not yet in schema)
-        exit_reason = t.get("notes") or None
+        # Exit reason — from the dedicated column (set at close time)
+        exit_reason = t.get("exit_reason") or None
+
+        # Signal score bucket
+        signal_id   = pos.get("signal_id")
+        confidence  = signal_score_map.get(signal_id) if signal_id else None
+        score_bucket = _score_bucket(confidence)
 
         per_trade.append({
             "trade_id": t["id"],
@@ -261,6 +310,7 @@ async def get_trade_analytics(
             "pnl_percent": t.get("pnl_percent"),
             "r_multiple": r_multiple,
             "exit_reason": exit_reason,
+            "score_bucket": score_bucket,
             "holding_days": holding_days,
             "partial_exit_used": t["position_id"] in partial_positions,
             "result": t["result"],
@@ -306,6 +356,7 @@ async def get_trade_analytics(
         "by_strategy_family": _group_by(per_trade, "strategy_family"),
         "by_regime":          _group_by(per_trade, "regime_at_entry"),
         "by_exit_reason":     _group_by(per_trade, "exit_reason"),
+        "by_score_bucket":    _group_by(per_trade, "score_bucket"),
         "per_trade":          per_trade,
     }
 
