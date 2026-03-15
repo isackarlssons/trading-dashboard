@@ -12,7 +12,7 @@ export type PositionActionType =
   | "reduce_position"
   | "close_full"
   | "hold";
-export type ActionExecutionState = "pending" | "acknowledged" | "executed" | "dismissed";
+export type ActionExecutionState = "pending" | "acknowledged" | "executed" | "dismissed" | "expired";
 
 export interface Strategy {
   id: string;
@@ -61,7 +61,7 @@ export interface PositionAction {
   id: string;
   position_id: string;
   action_type: PositionActionType;
-  // New specific fields
+  // Specific fields
   old_stop_loss: number | null;
   new_stop_loss: number | null;
   sell_percent: number | null;
@@ -70,10 +70,20 @@ export interface PositionAction {
   // Legacy fields (kept for backward compat)
   target_value: number | null;
   description: string | null;
+  // Lifecycle state
   execution_state: ActionExecutionState;
   created_by: string;
   created_at: string;
+  // Execution metadata (set when state → executed)
   executed_at: string | null;
+  executed_price: number | null;
+  execution_note: string | null;
+  // Dismissal metadata (set when state → dismissed)
+  dismissed_at: string | null;
+  dismissed_note: string | null;
+  // Expiry metadata
+  expires_at: string | null;
+  expired_at: string | null;
 }
 
 export interface PartialExit {

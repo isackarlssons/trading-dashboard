@@ -114,13 +114,17 @@ function PositionsContent() {
     } catch (err: any) { setError(err.message); loadPositions(); }
   }
 
-  // ─── Action: execute (routes by action type) ─────────────────────────────────
+  // ─── Action: execute (routes by action type) ────────────────────────────────
 
-  async function handleExec(action: PositionAction, positionId: string) {
+  async function handleExec(
+    action: PositionAction,
+    positionId: string,
+    meta?: { price?: number; note?: string },
+  ) {
     const pos = positions.find(p => p.id === positionId);
 
     if (action.action_type === "raise_stop" || action.action_type === "move_stop_to_breakeven") {
-      // Backend PATCH auto-updates position stop loss — just mark executed
+      // Backend PATCH auto-updates position stop loss — mark executed and store price/note
       const newSl = action.new_stop_loss
         ?? (action.action_type === "move_stop_to_breakeven"
           ? (pos?.actual_entry_price ?? pos?.entry_price ?? null)
@@ -137,7 +141,10 @@ function PositionsContent() {
         : p
       ));
       try {
-        await positionActionsApi.updateState(action.id, "executed");
+        await positionActionsApi.updateState(action.id, "executed", {
+          executed_price: meta?.price,
+          execution_note: meta?.note,
+        });
         loadPositions();
       } catch (err: any) { setError(err.message); loadPositions(); }
 
@@ -172,9 +179,9 @@ function PositionsContent() {
     }
   }
 
-  // ─── Action: dismiss ────────────────────────────────────────────────────────
+  // ─── Action: dismiss ─────────────────────────────────────────────────────────
 
-  async function handleDismiss(actionId: string) {
+  async function handleDismiss(actionId: string, note?: string) {
     setPositions(prev => prev.map(p => ({
       ...p,
       position_actions: p.position_actions?.map(a =>
@@ -182,7 +189,9 @@ function PositionsContent() {
       ),
     })));
     try {
-      await positionActionsApi.updateState(actionId, "dismissed");
+      await positionActionsApi.updateState(actionId, "dismissed", {
+        dismissed_note: note,
+      });
     } catch (err: any) { setError(err.message); loadPositions(); }
   }
 
@@ -255,7 +264,7 @@ function PositionsContent() {
                 onClose={handleClose}
                 onPartialClose={handlePartialClose}
                 onAcknowledgeAction={handleAck}
-                onExecuteAction={(action) => handleExec(action, pos.id)}
+                onExecuteAction={(action, meta) => handleExec(action, pos.id, meta)}
                 onDismissAction={handleDismiss}
               />
 

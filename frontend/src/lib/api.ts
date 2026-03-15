@@ -165,10 +165,18 @@ export const positionActionsApi = {
       body: JSON.stringify(data),
     }),
 
-  updateState: (actionId: string, execution_state: string) =>
+  updateState: (
+    actionId: string,
+    execution_state: string,
+    extra?: {
+      executed_price?: number;
+      execution_note?: string;
+      dismissed_note?: string;
+    }
+  ) =>
     apiFetch<PositionAction>(`/position-actions/${actionId}`, {
       method: "PATCH",
-      body: JSON.stringify({ execution_state }),
+      body: JSON.stringify({ execution_state, ...extra }),
     }),
 
   delete: (actionId: string) =>

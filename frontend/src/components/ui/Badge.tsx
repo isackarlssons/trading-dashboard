@@ -22,6 +22,8 @@ const styles: Record<string, string> = {
   hold: "bg-[var(--green3)] text-[var(--green)]",
   acknowledged: "bg-[var(--blue2)] text-[var(--blue)]",
   executed: "bg-[var(--green3)] text-[var(--green)]",
+  dismissed: "bg-[var(--cream3)] text-[var(--ink4)]",
+  expired: "bg-[var(--cream3)] text-[var(--ink4)]",
 };
 
 export function Badge({

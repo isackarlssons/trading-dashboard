@@ -7,6 +7,12 @@ from app.core.auth import get_current_user
 
 router = APIRouter(prefix="/position-actions", tags=["position-actions"])
 
+# States that must never trigger trading side-effects
+_NO_SIDE_EFFECT_STATES = {"acknowledged", "dismissed", "expired"}
+
+# States that trigger stop-loss updates on the position
+_STOP_TYPES = {"raise_stop", "move_stop_to_breakeven"}
+
 
 @router.get("/by-position/{position_id}")
 async def list_actions_for_position(
@@ -51,9 +57,12 @@ async def create_action(
 ):
     """Create a new position management action (typically sent by the bot).
 
-    Duplicate prevention: if there is already a pending action of the same
-    action_type for this position, the existing action is returned instead of
-    creating a new one.
+    Duplicate prevention:
+    - Stop actions (raise_stop / move_stop_to_breakeven): if a pending stop
+      already exists, compare targets. Keep the more protective one; dismiss
+      the weaker one.
+    - All other action types: if a pending action of the same type exists,
+      return it unchanged.
 
     Payload:
         position_id: str        (UUID)
@@ -61,11 +70,10 @@ async def create_action(
                                  | reduce_position | close_full | hold)
         old_stop_loss: float    (optional)
         new_stop_loss: float    (optional)
-        sell_percent: float     (optional, 0-100)
+        sell_percent: float     (optional, 0–100)
         sell_quantity: float    (optional)
         reason: str             (optional)
-        target_value: float     (optional, legacy)
-        description: str        (optional, legacy)
+        expires_at: str         (optional ISO timestamp)
     """
     sb = get_supabase()
 
@@ -89,17 +97,16 @@ async def create_action(
         raise HTTPException(status_code=400, detail="Position is not open or reduced")
 
     direction = pos_result.data["direction"]
-    STOP_TYPES = {"raise_stop", "move_stop_to_breakeven"}
+    now = datetime.utcnow().isoformat()
 
-    if action_type in STOP_TYPES:
+    if action_type in _STOP_TYPES:
         new_stop = data.get("new_stop_loss")
 
-        # Fetch ALL pending stop actions for this position (both stop types)
         existing_stops = (
             sb.table("position_actions")
             .select("*")
             .eq("position_id", position_id)
-            .in_("action_type", list(STOP_TYPES))
+            .in_("action_type", list(_STOP_TYPES))
             .eq("execution_state", "pending")
             .execute()
         ).data or []
@@ -107,7 +114,6 @@ async def create_action(
         for existing in existing_stops:
             old_stop = existing.get("new_stop_loss")
 
-            # If we can't compare numerically, return existing to avoid duplicates
             if old_stop is None or new_stop is None:
                 return existing
 
@@ -116,18 +122,22 @@ async def create_action(
                     return existing          # same target — true duplicate
                 elif new_stop > old_stop:
                     # New is more protective — dismiss the weaker pending stop
-                    sb.table("position_actions").update(
-                        {"execution_state": "dismissed"}
-                    ).eq("id", existing["id"]).execute()
+                    sb.table("position_actions").update({
+                        "execution_state": "dismissed",
+                        "dismissed_at": now,
+                        "dismissed_note": "Superseded by a more protective stop action",
+                    }).eq("id", existing["id"]).execute()
                 else:
                     return existing          # existing is already better
             else:  # short
                 if abs(new_stop - old_stop) < 0.001:
                     return existing
                 elif new_stop < old_stop:
-                    sb.table("position_actions").update(
-                        {"execution_state": "dismissed"}
-                    ).eq("id", existing["id"]).execute()
+                    sb.table("position_actions").update({
+                        "execution_state": "dismissed",
+                        "dismissed_at": now,
+                        "dismissed_note": "Superseded by a more protective stop action",
+                    }).eq("id", existing["id"]).execute()
                 else:
                     return existing
     else:
@@ -153,14 +163,26 @@ async def update_action(
     data: dict,
     user: dict = Depends(get_current_user),
 ):
-    """Update action execution state (acknowledged / executed / dismissed).
+    """Update action execution state and optional metadata.
 
-    When marking raise_stop or move_stop_to_breakeven as executed, the
-    position's current_stop_loss (and legacy stop_loss) is updated automatically.
+    Lifecycle transitions
+    ─────────────────────
+    pending      → acknowledged  Trader has seen / accepted the suggestion.
+    acknowledged → executed      Trader confirms it was done at the broker.
+                                 • Triggers stop-loss side-effects for stop actions.
+                                 • Accepts: executed_price, execution_note
+    pending /
+    acknowledged → dismissed     Trader intentionally ignored / rejected it.
+                                 • NO trading side-effects.
+                                 • Accepts: dismissed_note
+    any active   → expired       System or user marks the action no longer relevant.
+                                 • NO trading side-effects.
+
+    Only 'executed' triggers position updates.  All other transitions are
+    purely administrative and safe.
     """
     sb = get_supabase()
 
-    # Fetch action first so we can apply side-effects on execute
     action_result = (
         sb.table("position_actions")
         .select("*")
@@ -172,45 +194,66 @@ async def update_action(
         raise HTTPException(status_code=404, detail="Action not found")
     action = action_result.data
 
-    update_data = {}
-    if "execution_state" in data:
-        new_state = data["execution_state"]
-        update_data["execution_state"] = new_state
+    new_state = data.get("execution_state")
+    if not new_state:
+        raise HTTPException(status_code=400, detail="execution_state is required")
 
-        if new_state == "executed":
-            now = datetime.utcnow().isoformat()
-            update_data["executed_at"] = now
+    now = datetime.utcnow().isoformat()
+    update_data: dict = {"execution_state": new_state}
 
-            # Auto-update position stop loss for stop-management actions
-            if action["action_type"] == "raise_stop" and action.get("new_stop_loss"):
+    # ── acknowledged: purely administrative ──────────────────────────────────
+    if new_state == "acknowledged":
+        pass  # only state change; no side-effects, no timestamp column yet
+
+    # ── executed: record metadata + trigger side-effects ─────────────────────
+    elif new_state == "executed":
+        update_data["executed_at"] = now
+
+        if data.get("executed_price") is not None:
+            update_data["executed_price"] = data["executed_price"]
+        if data.get("execution_note"):
+            update_data["execution_note"] = data["execution_note"]
+
+        # Stop actions: auto-update position's current_stop_loss
+        if action["action_type"] == "raise_stop" and action.get("new_stop_loss"):
+            sb.table("positions").update({
+                "current_stop_loss": action["new_stop_loss"],
+                "stop_loss":         action["new_stop_loss"],
+            }).eq("id", action["position_id"]).execute()
+
+        elif action["action_type"] == "move_stop_to_breakeven":
+            breakeven = action.get("new_stop_loss")
+            if breakeven is None:
+                pos_result = (
+                    sb.table("positions")
+                    .select("actual_entry_price, entry_price")
+                    .eq("id", action["position_id"])
+                    .single()
+                    .execute()
+                )
+                if pos_result.data:
+                    breakeven = (
+                        pos_result.data.get("actual_entry_price")
+                        or pos_result.data.get("entry_price")
+                    )
+            if breakeven:
                 sb.table("positions").update({
-                    "current_stop_loss": action["new_stop_loss"],
-                    "stop_loss": action["new_stop_loss"],
+                    "current_stop_loss": breakeven,
+                    "stop_loss":         breakeven,
                 }).eq("id", action["position_id"]).execute()
 
-            elif action["action_type"] == "move_stop_to_breakeven":
-                breakeven = action.get("new_stop_loss")
-                if breakeven is None:
-                    pos_result = (
-                        sb.table("positions")
-                        .select("actual_entry_price, entry_price")
-                        .eq("id", action["position_id"])
-                        .single()
-                        .execute()
-                    )
-                    if pos_result.data:
-                        breakeven = (
-                            pos_result.data.get("actual_entry_price")
-                            or pos_result.data.get("entry_price")
-                        )
-                if breakeven:
-                    sb.table("positions").update({
-                        "current_stop_loss": breakeven,
-                        "stop_loss": breakeven,
-                    }).eq("id", action["position_id"]).execute()
+    # ── dismissed: record metadata, NO side-effects ───────────────────────────
+    elif new_state == "dismissed":
+        update_data["dismissed_at"] = now
+        if data.get("dismissed_note"):
+            update_data["dismissed_note"] = data["dismissed_note"]
 
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No valid fields to update")
+    # ── expired: record timestamp, NO side-effects ────────────────────────────
+    elif new_state == "expired":
+        update_data["expired_at"] = now
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown execution_state: {new_state}")
 
     result = (
         sb.table("position_actions")
