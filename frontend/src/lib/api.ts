@@ -4,6 +4,7 @@ import type {
   Position,
   Trade,
   TradeStats,
+  TradeAnalytics,
   Strategy,
   RiskSummary,
   CreateSignal,
@@ -191,6 +192,11 @@ export const tradesApi = {
   stats: (ticker?: string) => {
     const qs = ticker ? `?ticker=${ticker}` : "";
     return apiFetch<TradeStats>(`/trades/stats${qs}`);
+  },
+
+  analytics: (ticker?: string) => {
+    const qs = ticker ? `?ticker=${encodeURIComponent(ticker)}` : "";
+    return apiFetch<TradeAnalytics>(`/trades/analytics${qs}`);
   },
 
   get: (id: string) => apiFetch<Trade>(`/trades/${id}`),

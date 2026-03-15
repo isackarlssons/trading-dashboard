@@ -187,6 +187,47 @@ export interface RiskSummary {
   per_position: PositionRisk[];
 }
 
+// ─── Analytics types ─────────────────────────────────────────────────────────
+
+export interface PerTradeAnalytics {
+  trade_id: string;
+  ticker: string;
+  direction: SignalDirection;
+  strategy_name: string | null;
+  regime_at_entry: string | null;
+  pnl: number | null;
+  pnl_percent: number | null;
+  r_multiple: number | null;
+  exit_reason: string | null;
+  holding_days: number | null;
+  partial_exit_used: boolean;
+  result: TradeResult;
+}
+
+export interface BreakdownGroup {
+  trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  avg_r: number | null;
+}
+
+export interface TradeAnalytics {
+  total_trades: number;
+  win_rate: number;
+  expectancy_r: number | null;
+  avg_r: number | null;
+  avg_win_r: number | null;
+  avg_loss_r: number | null;
+  profit_factor: number | null;
+  max_drawdown_pct: number | null;
+  avg_holding_days: number | null;
+  by_strategy: Record<string, BreakdownGroup>;
+  by_regime: Record<string, BreakdownGroup>;
+  by_exit_reason: Record<string, BreakdownGroup>;
+  per_trade: PerTradeAnalytics[];
+}
+
 // ─── Request types ──────────────────────────────────────────────────────────
 
 export interface TakeSignal {

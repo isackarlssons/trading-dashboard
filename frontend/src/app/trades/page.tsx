@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback } from "react";
 import { tradesApi } from "@/lib/api";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
-import type { Trade, TradeStats } from "@/types";
+import type { Trade, TradeStats, TradeAnalytics, BreakdownGroup } from "@/types";
 
 export default function TradesPage() {
   return (
@@ -18,6 +18,7 @@ export default function TradesPage() {
 function TradesContent() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [stats, setStats] = useState<TradeStats | null>(null);
+  const [analytics, setAnalytics] = useState<TradeAnalytics | null>(null);
   const [filter, setFilter] = useState<string>("all");
   const [tickerSearch, setTickerSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -30,8 +31,12 @@ function TradesContent() {
     try {
       setLoading(true);
       const params = filter !== "all" ? { result: filter } : undefined;
-      const [t, s] = await Promise.all([tradesApi.list(params), tradesApi.stats()]);
-      setTrades(t); setStats(s);
+      const [t, s, a] = await Promise.all([
+        tradesApi.list(params),
+        tradesApi.stats(),
+        tradesApi.analytics().catch(() => null),
+      ]);
+      setTrades(t); setStats(s); setAnalytics(a);
     } catch (err: any) { setError(err.message); }
     finally { setLoading(false); }
   }, [filter]);
@@ -79,6 +84,10 @@ function TradesContent() {
           <MiniStat label="Sämst" value={`${stats.worst_trade || 0}%`} color="var(--red)" />
           <MiniStat label="PF" value={stats.profit_factor?.toString() || "N/A"} />
         </div>
+      )}
+
+      {analytics && analytics.total_trades > 0 && (
+        <AnalyticsSection a={analytics} />
       )}
 
       {error && (
@@ -149,6 +158,88 @@ function TradesContent() {
           </div>
         )}
       </Card>
+    </div>
+  );
+}
+
+// ─── Analytics Section ────────────────────────────────────────────────────────
+
+function AnalyticsSection({ a }: { a: TradeAnalytics }) {
+  const fmt = (v: number | null, decimals = 2, suffix = "") =>
+    v != null ? `${v.toFixed(decimals)}${suffix}` : "N/A";
+  const fmtR = (v: number | null) =>
+    v != null ? `${v > 0 ? "+" : ""}${v.toFixed(2)}R` : "N/A";
+
+  const hasStrategies = Object.keys(a.by_strategy).length > 0;
+  const hasRegimes    = Object.keys(a.by_regime).filter(k => k !== "Unknown").length > 0;
+
+  return (
+    <div className="space-y-3">
+      {/* Header */}
+      <h2 className="font-['DM_Mono',monospace] text-[9px] text-[var(--ink4)] uppercase tracking-[1.4px]">
+        Analytik · R-multiplar & Strategi
+      </h2>
+
+      {/* R-metric row */}
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+        <MiniStat label="Expectancy" value={fmtR(a.expectancy_r)}
+          color={a.expectancy_r != null ? (a.expectancy_r >= 0 ? "var(--green)" : "var(--red)") : undefined} />
+        <MiniStat label="Avg R" value={fmtR(a.avg_r)}
+          color={a.avg_r != null ? (a.avg_r >= 0 ? "var(--green)" : "var(--red)") : undefined} />
+        <MiniStat label="Avg Vinst R" value={fmtR(a.avg_win_r)} color="var(--green)" />
+        <MiniStat label="Avg Förlust R" value={fmtR(a.avg_loss_r)} color="var(--red)" />
+        <MiniStat label="Max Drawdown" value={fmt(a.max_drawdown_pct, 1, "%")}
+          color={a.max_drawdown_pct != null && a.max_drawdown_pct > 0 ? "var(--red)" : undefined} />
+        <MiniStat label="Snitt Dagar" value={fmt(a.avg_holding_days, 1)} />
+      </div>
+
+      {/* Breakdown tables */}
+      {(hasStrategies || hasRegimes) && (
+        <div className={`grid gap-3 ${hasStrategies && hasRegimes ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"}`}>
+          {hasStrategies && (
+            <BreakdownTable title="Per Strategi" data={a.by_strategy} />
+          )}
+          {hasRegimes && (
+            <BreakdownTable title="Per Regime" data={a.by_regime} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BreakdownTable({ title, data }: { title: string; data: Record<string, BreakdownGroup> }) {
+  const rows = Object.entries(data).sort((a, b) => b[1].trades - a[1].trades);
+  return (
+    <div className="bg-[var(--surface)] border border-[var(--border)] rounded-[var(--r)] shadow-[var(--shadow)] overflow-hidden">
+      <div className="px-[14px] py-[8px] border-b border-[var(--border)] bg-[var(--cream)]">
+        <span className="font-['DM_Mono',monospace] text-[8.5px] text-[var(--ink4)] uppercase tracking-[1.1px]">{title}</span>
+      </div>
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-[var(--border)]">
+            {["Namn", "Trades", "Win %", "Avg R"].map(h => (
+              <th key={h} className="text-left py-[7px] px-[12px] font-['DM_Mono',monospace] text-[7.5px] text-[var(--ink4)] uppercase tracking-[1px] first:pl-[14px] last:pr-[14px]">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([name, g]) => (
+            <tr key={name} className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--cream)] transition-colors">
+              <td className="py-[8px] px-[12px] pl-[14px] font-['DM_Mono',monospace] text-[11px] text-[var(--ink)]">{name}</td>
+              <td className="py-[8px] px-[12px] font-['DM_Mono',monospace] text-[11px] text-[var(--ink3)]">{g.trades}</td>
+              <td className="py-[8px] px-[12px] font-['DM_Mono',monospace] text-[11px] font-medium"
+                style={{ color: g.win_rate >= 50 ? "var(--green)" : "var(--red)" }}>
+                {g.win_rate.toFixed(1)}%
+              </td>
+              <td className="py-[8px] px-[12px] pr-[14px] font-['DM_Mono',monospace] text-[11px]"
+                style={{ color: g.avg_r != null ? (g.avg_r >= 0 ? "var(--green)" : "var(--red)") : "var(--ink4)" }}>
+                {g.avg_r != null ? `${g.avg_r > 0 ? "+" : ""}${g.avg_r.toFixed(2)}R` : "N/A"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
